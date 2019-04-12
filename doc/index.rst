@@ -1,13 +1,16 @@
-.. project-template documentation master file, created by
-   sphinx-quickstart on Mon Jan 18 14:44:12 2016.
-   You can adapt this file completely to your liking, but it should at least
-   contain the root `toctree` directive.
+.. include:: <isonum.txt>
 
-Welcome to sklearn-template's documentation!
-============================================
+Welcome to koho\ |trade|'s documentation!
+=========================================
 
-This project is a reference implementation to anyone who wishes to develop
-scikit-learn compatible classes.
+**koho** (Hawaiian word for 'to estimate') is a **Decision Forest** **C++ library**
+with a `scikit-learn`_ compatible **Python interface**.
+
+**Python only implementation!**
+
+.. _`scikit-learn`: http://scikit-learn.org
+
+----------
 
 .. toctree::
    :maxdepth: 2
@@ -22,29 +25,36 @@ scikit-learn compatible classes.
    :caption: Documentation
 
    user_guide
-   api
+   python_api
+   implementation
 
 .. toctree::
    :maxdepth: 2
    :hidden:
-   :caption: Tutorial - Examples
+   :caption: Tutorial
 
    auto_examples/index
 
 `Getting started <quick_start.html>`_
 -------------------------------------
 
-Information regarding this template and how to modify it for your own project.
+Quick start guide for the ``koho`` package.
 
 `User Guide <user_guide.html>`_
 -------------------------------
 
-An example of narrative documentation.
+Documentation of the ``koho`` package.
 
-`API Documentation <api.html>`_
+`Python API <python_api.html>`_
 -------------------------------
 
-An example of API documentation.
+Documentation of the ``koho`` Python interface.
+
+`Implementation <implementation.html>`_
+---------------------------------------
+
+Implementation details of the ``koho`` package.
+
 
 `Examples <auto_examples/index.html>`_
 --------------------------------------

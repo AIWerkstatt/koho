@@ -1,6 +1,7 @@
+.. include:: <isonum.txt>
 .. -*- mode: rst -*-
 
-|Travis|_ |AppVeyor|_ |Codecov|_ |CircleCI|_ |ReadTheDocs|_
+|Travis|_ |AppVeyor|_ |CircleCI|_ |ReadTheDocs|_
 
 .. |Travis| image:: https://travis-ci.org/AIWerkstatt/koho.svg?branch=master
 .. _Travis: https://travis-ci.org/AIWerkstatt/koho
@@ -15,24 +16,36 @@
 .. _CircleCI: https://circleci.com/gh/AIWerkstatt/koho
 
 .. |ReadTheDocs| image:: https://readthedocs.org/projects/koho/badge/?version=latest
-.. _ReadTheDocs: https://koho.readthedocs.io/en/latest/?badge=latest
+.. _ReadTheDocs: https://koho.readthedocs.io/en/latest/
 
-project-template - A template for scikit-learn contributions
-============================================================
+koho\ |trade|
+=============
 
-.. _scikit-learn: https://scikit-learn.org
+**koho** (Hawaiian word for 'to estimate') is a **Decision Forest** **C++ library**
+with a `scikit-learn`_ compatible **Python interface**.
 
-**project-template** is a template project for scikit-learn_ compatible
-extensions.
+**Python only implementation!**
 
-It aids development of estimators that can be used in scikit-learn pipelines
-and (hyper)parameter search, while facilitating testing (including some API
-compliance), documentation, open source development, packaging, and continuous
-integration.
+- Classification
+- Numerical (dense) data
+- Class balancing
+- Multi-Class
+- Single-Output
+- Build order: depth first
+- Impurity criteria: gini
+- n Decision Trees with soft voting
+- Split a. features: best over k (incl. all) random features
+- Split b. thresholds: 1 random or all thresholds
+- Stop criteria: max depth, (pure, no improvement)
+- Bagging (Bootstrap AGGregatING) with out-of-bag estimates
+- Important Features
+- Export Graph
 
-.. _documentation: https://koho.readthedocs.io/en/latest/quick_start.html
+`ReadTheDocs`_
 
-Refer to the documentation_ to modify the template for your own scikit-learn
-contribution.
+`New BSD License <LICENSE>`_
 
-*Thank you for cleanly contributing to the scikit-learn ecosystem!*
+\ |copy| Copyright 2019, `AI Werkstatt`_\ |trade|. All rights reserved.
+
+.. _`scikit-learn`: http://scikit-learn.org
+.. _`AI Werkstatt`: http://www.aiwerkstatt.com

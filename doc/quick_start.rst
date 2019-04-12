@@ -1,131 +1,102 @@
-#####################################
-Quick Start with the project-template
-#####################################
+.. include:: <isonum.txt>
 
-This package serves as a skeleton package aiding at developing compatible
-scikit-learn contribution.
+###########
+Quick Start
+###########
 
-Creating your own scikit-learn contribution package
-===================================================
+Programming Language:
+`Python`_ 3.5, 3.6, 3.7
 
-1. Download and setup your repository
--------------------------------------
+Python Packages:
+`numpy`_, `scipy`_, `scikit-learn`_
 
-To create your package, you need to clone the ``project-template`` repository::
+.. _`Python`: https://www.python.org
+.. _`numpy`: http://www.numpy.org
+.. _`scipy`: https://www.scipy.org
+.. _`scikit-learn`: http://scikit-learn.org
 
-    $ git clone https://github.com/scikit-learn-contrib/project-template.git
+You just want to use it
+=======================
 
-Before to reinitialize your git repository, you need to make the following
-changes. Replace all occurrences of ``skltemplate`` and ``sklearn-template``
-with the name of you own contribution. You can find all the occurrences using
-the following command::
+1. conda or pip installation
+----------------------------
 
-    $ git grep skltemplate
-    $ git grep sklearn-template
+The ``koho`` package is available through `conda-forge`_ and `PyPi`_ and
+can be installed using `conda`_ or `pip`_::
 
-To remove the history of the template package, you need to remove the `.git`
-directory::
+    $: conda install -c conda-forge koho
+    $: pip install koho
 
-    $ cd project-template
-    $ rm -rf .git
+.. _`pip`: https://pypi.org/project/pip/
+.. _`PyPi`: https://pypi.org/
+.. _`conda`: http://conda.pydata.org/
+.. _`conda-forge`: https://conda-forge.org/
 
-Then, you need to initialize your new git repository::
+2. Read the Docs
+----------------
 
-    $ git init
-    $ git add .
-    $ git commit -m 'Initial commit'
+The `koho documentation`_ is hosted on `Read the Docs`_::
 
-Finally, you create an online repository on GitHub and push your code online::
+    Firefox: http://koho.readthedocs.io
 
-    $ git remote add origin https://github.com/your_remote/your_contribution.git
-    $ git push origin master
+.. _`Read the Docs`: https://readthedocs.org/
+.. _`koho documentation`: http://koho.readthedocs.io/
 
-2. Develop your own scikit-learn estimators
--------------------------------------------
+3. Jupyter notebook
+-------------------
 
-.. _check_estimator: http://scikit-learn.org/stable/modules/generated/sklearn.utils.estimator_checks.check_estimator.html#sklearn.utils.estimator_checks.check_estimator
-.. _`Contributor's Guide`: http://scikit-learn.org/stable/developers/
-.. _PEP8: https://www.python.org/dev/peps/pep-0008/
-.. _PEP257: https://www.python.org/dev/peps/pep-0257/
-.. _NumPyDoc: https://github.com/numpy/numpydoc
-.. _doctests: https://docs.python.org/3/library/doctest.html
+The ``koho`` package can be used with `jupyter notebook`_::
 
-You can modify the source files as you want. However, your custom estimators
-need to pass the check_estimator_ test to be scikit-learn compatible. You can
-refer to the :ref:`User Guide <user_guide>` to help you create a compatible
-scikit-learn estimator.
+    $: conda install jupyter
+    $: conda install tornado=5.1.1  # downgrade if connection problems with jupyter
+    $: jupyter notebook
+    [] from koho.sklearn import DecisionTreeClassifier, DecisionForestClassifier
+    [] ...
 
-In any case, developers should endeavor to adhere to scikit-learn's
-`Contributor's Guide`_ which promotes the use of:
+.. _`jupyter notebook`: http://jupyter.org/
 
-* algorithm-specific unit tests, in addition to ``check_estimator``'s common
-  tests;
-* PEP8_-compliant code;
-* a clearly documented API using NumpyDoc_ and PEP257_-compliant docstrings;
-* references to relevant scientific literature in standard citation formats;
-* doctests_ to provide succinct usage examples;
-* standalone examples to illustrate the usage, model visualisation, and
-  benefits/benchmarks of particular algorithms;
-* efficient code when the need for optimization is supported by benchmarks.
+Download
+========
 
-3. Edit the documentation
--------------------------
+1. Download and install repository
+----------------------------------
 
-.. _Sphinx: http://www.sphinx-doc.org/en/stable/
+Clone the `koho repository`_ from `GitHub`_::
 
-The documentation is created using Sphinx_. In addition, the examples are
-created using ``sphinx-gallery``. Therefore, to generate locally the
-documentation, you are required to install the following packages::
+    $: sudo apt install git
+    $: git clone https://github.com/aiwerkstatt/koho.git
 
-    $ pip install sphinx sphinx-gallery sphinx_rtd_theme matplotlib numpydoc pillow
+.. _`GitHub`: https://github.com/
+.. _`koho repository`: https://github.com/AIWerkstatt/koho
 
-The documentation is made of:
+Build and install the ``koho`` package::
 
-* a home page, ``doc/index.rst``;
-* an API documentation, ``doc/api.rst`` in which you should add all public
-  objects for which the docstring should be exposed publicly.
-* a User Guide documentation, ``doc/user_guide.rst``, containing the narrative
-  documentation of your package, to give as much intuition as possible to your
-  users.
-* examples which are created in the `examples/` folder. Each example
-  illustrates some usage of the package. the example file name should start by
-  `plot_*.py`.
+    koho$: pip install -e .
 
-The documentation is built with the following commands::
+2. Generate the documentation
+-----------------------------
 
-    $ cd doc
-    $ make html
+Generate the ``koho`` documentation using `sphinx`_::
 
-4. Setup the continuous integration
------------------------------------
+    $: conda install sphinx sphinx-gallery sphinx_rtd_theme matplotlib numpydoc pillow
+    koho/doc$: make html
 
-The project template already contains configuration files of the continuous
-integration system. Basically, the following systems are set:
+View the ``koho`` documentation::
 
-* Travis CI is used to test the package in Linux. You need to activate Travis
-  CI for your own repository. Refer to the Travis CI documentation.
-* AppVeyor is used to test the package in Windows. You need to activate
-  AppVeyor for your own repository. Refer to the AppVeyor documentation.
-* Circle CI is used to check if the documentation is generated properly. You
-  need to activate Circle CI for your own repository. Refer to the Circle CI
-  documentation.
-* ReadTheDocs is used to build and host the documentation. You need to activate
-  ReadTheDocs for your own repository. Refer to the ReadTheDocs documentation.
-* CodeCov for tracking the code coverage of the package. You need to activate
-  CodeCov for you own repository.
-* PEP8Speaks for automatically checking the PEP8 compliance of your project for
-  each Pull Request.
+    Firebox: file:///home/<user>/<...>/koho/doc/_build/html/index.html
 
-Publish your package
-====================
+.. _`sphinx`: http://www.sphinx-doc.org/
+.. _`doxygen`: http://www.doxygen.nl/
 
-.. _PyPi: https://packaging.python.org/tutorials/packaging-projects/
-.. _conda-foge: https://conda-forge.org/
+3. Run tests
+------------
 
-You can make your package available through PyPi_ and conda-forge_. Refer to
-the associated documentation to be able to upload your packages such that
-it will be installable with ``pip`` and ``conda``. Once published, it will
-be possible to install your package with the following commands::
+Test the ``koho`` package using `pytest`_ with `pytest-cov`_ plugin::
 
-    $ pip install your-scikit-learn-contribution
-    $ conda install -c conda-forge your-scikit-learn-contribution
+    $: conda install pytest pytest-cov
+    koho$: pytest --disable-pytest-warnings -v --cov=koho --pyargs koho
+
+.. _`pytest`: http://doc.pytest.org
+.. _`pytest-xdist`: https://pypi.python.org/pypi/pytest-xdist
+.. _`pytest-cov`: https://pypi.python.org/pypi/pytest-cov
+
