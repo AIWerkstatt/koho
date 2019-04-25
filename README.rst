@@ -1,6 +1,6 @@
 .. -*- mode: rst -*-
 
-|Travis|_ |AppVeyor|_ |CircleCI|_ |ReadTheDocs|_
+|Travis|_ |AppVeyor|_ |Codecov|_ |CircleCI|_ |ReadTheDocs|_
 
 .. |Travis| image:: https://travis-ci.org/AIWerkstatt/koho.svg?branch=master
 .. _Travis: https://travis-ci.org/AIWerkstatt/koho
@@ -44,7 +44,7 @@ with a `scikit-learn`_ compatible **Python interface**.
 
 `New BSD License <LICENSE>`_
 
-(c) Copyright 2019, `AI Werkstatt`_ (TM). All rights reserved.
+Copyright 2019, `AI Werkstatt (TM)`_. All rights reserved.
 
 .. _`scikit-learn`: http://scikit-learn.org
-.. _`AI Werkstatt`: http://www.aiwerkstatt.com
+.. _`AI Werkstatt (TM)`: http://www.aiwerkstatt.com
