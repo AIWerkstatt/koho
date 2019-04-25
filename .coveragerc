@@ -4,8 +4,7 @@
 branch = True
 source = koho
 include = */koho/*
-omit =
-    */setup.py
+omit = */setup.py
 
 [report]
 exclude_lines =

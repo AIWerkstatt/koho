@@ -1,4 +1,3 @@
-.. include:: <isonum.txt>
 .. -*- mode: rst -*-
 
 |Travis|_ |AppVeyor|_ |CircleCI|_ |ReadTheDocs|_
@@ -18,8 +17,8 @@
 .. |ReadTheDocs| image:: https://readthedocs.org/projects/koho/badge/?version=latest
 .. _ReadTheDocs: https://koho.readthedocs.io/en/latest/
 
-koho\ |trade|
-=============
+koho (TM)
+=========
 
 **koho** (Hawaiian word for 'to estimate') is a **Decision Forest** **C++ library**
 with a `scikit-learn`_ compatible **Python interface**.
@@ -45,7 +44,7 @@ with a `scikit-learn`_ compatible **Python interface**.
 
 `New BSD License <LICENSE>`_
 
-\ |copy| Copyright 2019, `AI Werkstatt`_\ |trade|. All rights reserved.
+(c) Copyright 2019, `AI Werkstatt`_ (TM). All rights reserved.
 
 .. _`scikit-learn`: http://scikit-learn.org
 .. _`AI Werkstatt`: http://www.aiwerkstatt.com
