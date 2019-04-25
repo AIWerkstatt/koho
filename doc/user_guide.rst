@@ -199,7 +199,7 @@ View progress with dask::
 Tested Version
 ==============
 
-``koho`` 0.1.0,
+``koho`` 0.0.1,
 python 3.7.3,
 git 2.17.1,
 conda 4.6.8,

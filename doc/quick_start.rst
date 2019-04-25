@@ -5,7 +5,7 @@ Quick Start
 ###########
 
 Programming Language:
-`Python`_ 3.5, 3.6, 3.7
+`Python`_ 3.7
 
 Python Packages:
 `numpy`_, `scipy`_, `scikit-learn`_
