@@ -21,10 +21,9 @@ You just want to use it
 1. conda or pip installation
 ----------------------------
 
-The ``koho`` package is available through `conda-forge`_ and `PyPi`_ and
-can be installed using `conda`_ or `pip`_::
+The ``koho`` package is available through `PyPi`_ and
+can be installed using `pip`_::
 
-    $: conda install -c conda-forge koho
     $: pip install koho
 
 .. _`pip`: https://pypi.org/project/pip/
