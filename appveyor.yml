@@ -18,6 +18,7 @@ install:
   # install the dependencies
   - "conda install --yes pip numpy==%NUMPY_VERSION% scipy==%SCIPY_VERSION% scikit-learn==%SKLEARN_VERSION% nose pytest pytest-cov"
   - pip install codecov
+  - python setup.py build_ext --inplace
   - pip install .
 
 test_script:

@@ -24,6 +24,7 @@ install:
   - source activate testenv
   - conda install --yes numpy==$NUMPY_VERSION scipy==$SCIPY_VERSION scikit-learn==$SKLEARN_VERSION nose pytest pytest-cov
   - pip install codecov
+  - python setup.py build_ext --inplace
   - pip install .
 
 script:

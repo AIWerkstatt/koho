@@ -16,6 +16,7 @@ jobs:
             source activate testenv
             conda install --yes pip numpy scipy scikit-learn matplotlib sphinx sphinx_rtd_theme numpydoc pillow
             pip install sphinx-gallery
+            python setup.py build_ext --inplace
             pip install .
             cd doc
             make html
