@@ -1,4 +1,7 @@
 # encoding=utf-8
+# cython: linetrace=True
+# cython: binding=True
+# distutils: define_macros=CYTHON_TRACE_NOGIL=1
 """ Decision Tree module.
 
 - Classification
@@ -14,10 +17,10 @@
 - Important Features
 - Export Graph
 
-Implementation Optimizations:
+Optimized Implementation:
 stack, samples LUT with in-place partitioning, incremental histogram updates
 
-Python implementation using NumPy.
+Python implementation using NumPy with Criterion implemented in Cython.
 """
 
 # Author: AI Werkstatt (TM)
@@ -55,7 +58,7 @@ class Node:
         self.right_child = right_child
         self.feature = feature
         self.threshold = threshold
-        self.histogram = histogram  # number of samples per class
+        self.histogram = np.array(histogram)  # number of samples per class  !!!
         self.impurity = impurity  # for inspection (e.g. graphviz visualization)
         self.improvement = improvement  # for feature importances
 
@@ -66,13 +69,13 @@ class Tree:
     """ Binary tree structure build up of nodes.
     """
 
-    def __init__(self, n_classes=None, n_features=None):
+    def __init__(self, n_features=None, n_classes=None):
         """ Create a new tree without nodes.
         """
 
         # Parameters
-        self.n_classes = n_classes
         self.n_features = n_features
+        self.n_classes = n_classes
         # Fields
         self.max_depth = None
         self.node_count = 0
@@ -187,12 +190,36 @@ class Tree:
 # Impurity Criterion
 # ==============================================================================
 
+import cython
 
-class GiniCriterion:
+from libc.stdlib cimport calloc, free
+from libc.string cimport memset, memcpy
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+
+
+cdef class GiniCriterion:
     """Gini Index impurity criterion.
     """
 
-    def __init__(self, n_classes, n_samples, class_weight):
+    cdef long n_classes
+    cdef long n_samples
+    cdef double* class_weight
+
+    cdef double* node_weighted_histogram
+    cdef double node_weighted_n_samples
+    cdef double node_impurity
+
+    cdef double* node_weighted_histogram_left
+    cdef double node_weighted_n_samples_left
+    cdef double impurity_left
+    cdef double* node_weighted_histogram_right
+    cdef double node_weighted_n_samples_right
+    cdef double impurity_right
+    cdef long node_pos
+
+    def __cinit__(self, long n_classes, long n_samples, double[::1] class_weight):
         """ Create and initialize a new gini criterion.
 
         Assuming: y is 0, 1, 2, ... (n_classes - 1).
@@ -200,47 +227,92 @@ class GiniCriterion:
 
         self.n_classes = n_classes
         self.n_samples = n_samples
-        self.class_weight = class_weight
+        self.class_weight = <double*> calloc(n_classes, sizeof(double))
 
-        self.node_weighted_histogram = np.zeros(n_classes)
+        self.node_weighted_histogram = <double*> calloc(n_classes, sizeof(double))
+        self.node_weighted_histogram_left = <double*> calloc(n_classes, sizeof(double))
+        self.node_weighted_histogram_right = <double*> calloc(n_classes, sizeof(double))
+
+        if (self.class_weight == NULL or
+            self.node_weighted_histogram == NULL or
+            self.node_weighted_histogram_left == NULL or
+            self.node_weighted_histogram_right == NULL):
+            raise MemoryError()
+
+        cdef long c
+        for c in range(n_classes):
+            self.class_weight[c] = class_weight[c]
+
         self.node_weighted_n_samples = 0.0
         self.node_impurity = 0.0
 
-        self.node_pos = 0
-        self.node_weighted_histogram_left = np.zeros(n_classes)
         self.node_weighted_n_samples_left = 0.0
         self.impurity_left = 0.0
-        self.node_weighted_histogram_right = np.zeros(n_classes)
         self.node_weighted_n_samples_right = 0.0
         self.impurity_right = 0.0
+        self.node_pos = 0
 
         return
 
-    def calculate_node_histogram(self, y, samples, start, end):
+    def __dealloc__(self):
+        """Destructor."""
+
+        free(self.class_weight)
+        free(self.node_weighted_histogram)
+        free(self.node_weighted_histogram_left)
+        free(self.node_weighted_histogram_right)
+
+        return
+
+    cpdef calculate_node_histogram(self, long[::1] y, long[::1] samples, long start, long end):
         """ Calculate number of samples per class histogram for current node.
         """
 
         # Calculate number of samples per class histogram for current node
-        node_histogram = np.bincount(y[samples[start:end]]).astype(np.float64)
-        # Resized in case that not all classes are represented at the current node
-        node_histogram.resize(self.n_classes, refcheck=False)
+
+        cdef double* histogram
+        histogram = NULL
+        histogram = <double*> calloc(self.n_classes, sizeof(double))
+        if (histogram == NULL):
+            raise MemoryError
+
+        cdef long p
+        for p in range(start, end):
+            histogram[y[samples[p]]] += 1.0
+
         # Apply class weights to balance classes
-        self.node_weighted_histogram = self.class_weight * node_histogram
 
-        return self.node_weighted_histogram
+        self.node_weighted_n_samples = 0.0
+        cdef double weighted_cnt
+        cdef long c
+        for c in range(self.n_classes):
+            weighted_cnt = self.class_weight[c] * histogram[c]
+            self.node_weighted_histogram[c] = weighted_cnt
+            self.node_weighted_n_samples += weighted_cnt
 
-    def calculate_node_impurity(self):
+        free(histogram)
+
+        return np.asarray(<double[:self.n_classes]> self.node_weighted_histogram)
+
+    cpdef calculate_node_impurity(self):
         """Calculate the impurity of the current node using the Gini criterion.
 
         Assuming: calculate_node_histogram(), sum(node_weighted_histogram) > 0
         """
 
-        self.node_impurity = 1.0 - np.sum(self.node_weighted_histogram**2) / \
-                                  (np.sum(self.node_weighted_histogram)**2)
+        cdef double cnt
+        cdef double sum_sq = 0.0
+        cdef long c
+        for c in range(self.n_classes):
+            cnt = self.node_weighted_histogram[c]
+            sum_sq += cnt*cnt
+
+        self.node_impurity = 1.0 - sum_sq / (self.node_weighted_n_samples * \
+                                             self.node_weighted_n_samples)
 
         return self.node_impurity
 
-    def init_children_histograms(self):
+    cpdef init_children_histograms(self):
         """ Initialize number of samples per class histograms for the children
         of the current node.
 
@@ -251,15 +323,17 @@ class GiniCriterion:
         self.node_pos = 0
 
         # Initialize number of samples per class histogram for left child to 0
-        self.node_weighted_histogram_left = np.zeros_like(self.node_weighted_histogram)
+        memset(self.node_weighted_histogram_left, 0, self.n_classes * sizeof(double))
+        self.node_weighted_n_samples_left = 0.0
 
         # Initialize number of samples per class histogram for right child to
         # samples per class histogram from the current node
-        self.node_weighted_histogram_right = self.node_weighted_histogram
+        memcpy(self.node_weighted_histogram_right, self.node_weighted_histogram, self.n_classes * sizeof(double))
+        self.node_weighted_n_samples_right = self.node_weighted_n_samples
 
         return
 
-    def update_children_histograms(self, y, sf, new_pos):
+    cpdef update_children_histograms(self, long[::1] y_view, long[::1] sf_view, long new_pos):
         """ Update number of samples per class histograms for the children
         of the current node from current position to a new position.
 
@@ -270,41 +344,69 @@ class GiniCriterion:
         # Add number of samples per class histogram for samples[pos, new_pos]
         # to the number of samples per class histogram for the left child
         # including samples[start, pos]
-        histogram = np.bincount(y[sf[self.node_pos:new_pos]]).astype(np.float64)
-        # Resized in case that not all classes are represented at the current node
-        histogram.resize(self.n_classes, refcheck=False)
+
+        cdef double* histogram
+        histogram = NULL
+        histogram = <double*> calloc(self.n_classes, sizeof(double))
+        if (histogram == NULL):
+            raise MemoryError
+
+        cdef long p
+        for p in range(self.node_pos, new_pos):
+            histogram[y_view[sf_view[p]]] += 1.0
+
         # Apply class weights to balance classes
-        weighted_histogram = self.class_weight * histogram
-        self.node_weighted_histogram_left += weighted_histogram
+
+        cdef double weighted_cnt
+        cdef long c
+        for c in range(self.n_classes):
+            weighted_cnt = self.class_weight[c] * histogram[c]
+            self.node_weighted_histogram_left[c] += weighted_cnt
+            self.node_weighted_n_samples_left += weighted_cnt
+
+        free(histogram)
 
         # Update number of samples per class histogram for the right child
         # given: histogram_left[x] + histogram_right[x] = histogram[x]
-        self.node_weighted_histogram_right = self.node_weighted_histogram - \
-                                             self.node_weighted_histogram_left
+
+        for c in range(self.n_classes):
+            self.node_weighted_histogram_right[c] = self.node_weighted_histogram[c] - \
+                                                    self.node_weighted_histogram_left[c]
+
+        self.node_weighted_n_samples_right = self.node_weighted_n_samples - \
+                                             self.node_weighted_n_samples_left
 
         # Update current position
         self.node_pos = new_pos
 
         return
 
-    def calculate_impurity_children(self):
+    cpdef calculate_impurity_children(self):
         """Calculate the impurity of children nodes from the current node using the Gini index
         based on the number of samples per class histograms for the current position.
 
         Assuming: update_children_histograms()
         """
 
-        self.node_weighted_n_samples_left = np.sum(self.node_weighted_histogram_left)
-        self.node_weighted_n_samples_right = np.sum(self.node_weighted_histogram_right)
+        cdef double cnt_left
+        cdef double sum_sq_left = 0.0
+        cdef double cnt_right
+        cdef double sum_sq_right = 0.0
+        cdef long c
+        for c in range(self.n_classes):
+            cnt_left = self.node_weighted_histogram_left[c]
+            sum_sq_left += cnt_left*cnt_left
+            cnt_right = self.node_weighted_histogram_right[c]
+            sum_sq_right += cnt_right*cnt_right
 
-        self.impurity_left = 1.0 - np.sum(self.node_weighted_histogram_left**2) / \
-                                   (self.node_weighted_n_samples_left**2)
-        self.impurity_right = 1.0 - np.sum(self.node_weighted_histogram_right**2) / \
-                                    (self.node_weighted_n_samples_right**2)
+        self.impurity_left = 1.0 - sum_sq_left / (self.node_weighted_n_samples_left * \
+                                                  self.node_weighted_n_samples_left)
+        self.impurity_right = 1.0 - sum_sq_right / (self.node_weighted_n_samples_right * \
+                                                    self.node_weighted_n_samples_right)
 
         return self.impurity_left, self.impurity_right
 
-    def calculate_impurity_improvement(self):
+    cpdef calculate_impurity_improvement(self):
         """Calculate the impurity improvement from the current node to its children
         based on the impurity of the children nodes for the current position.
 
@@ -324,6 +426,9 @@ class GiniCriterion:
         # given the way the class weights are calculated
 
         return improvement
+
+@cython.boundscheck(True)
+@cython.wraparound(True)
 
 # ==============================================================================
 # Node Splitter
@@ -369,7 +474,7 @@ class BestSplitter:
         self.start = start
         self.end = end
 
-        histogram = self.criterion.calculate_node_histogram(y, self.samples, start, end)
+        histogram = self.criterion.calculate_node_histogram(y, self.samples, start, end).tolist()  # !!!
         impurity = self.criterion.calculate_node_impurity()
 
         return histogram, impurity
@@ -417,9 +522,9 @@ class BestSplitter:
                 # Initialize position of last and next potential split to 0
                 p, pn = 0, 0
                 # Loop: samples
-                while pn < n_samples:
+                while (pn < n_samples):
                     # If remaining Xf values are constant
-                    if Xf[pn] + PRECISION >= Xf[-1]:
+                    if (Xf[pn] + PRECISION >= Xf[-1]):
                         break  # next feature
                     # Skip constant Xf values
                     while (pn+1 < n_samples and
@@ -439,10 +544,10 @@ class BestSplitter:
                     impurity_left, impurity_right = self.criterion.calculate_impurity_children()
                     # Calculate impurity improvement for current position
                     improvement = self.criterion.calculate_impurity_improvement()
-                    if improvement > max_improvement:
+                    if (improvement > max_improvement):
                         max_improvement = improvement
 
-                        if feature != f:  # only once per feature
+                        if (feature != f):  # only once per feature
                             s = np.copy(sf)
 
                         # Best split
@@ -468,11 +573,11 @@ class BestSplitter:
 
                 # Draw random threshold
                 threshold = self.random_state.uniform(Xf_min + PRECISION, Xf_max)  # excludes Xf_min, Xf_max
-                # note uniform(low, high), low is inclusive and high is exclusive
+                # note numpy uniform(low, high), low is inclusive and high is exclusive
 
                 # Partition sf such that X[sf[np-1],f] <= threshold < X[sf[np],f]
                 p, pn = 0, n_samples
-                while p < pn:
+                while (p < pn):
                     if Xf[p] <= threshold:
                         p += 1
                     else:
@@ -538,7 +643,7 @@ class BestSplitter:
 
             # Split feature
             thresholdf, sf, posf, improvementf = self.split_feature(f, X, y)
-            if improvementf > max_improvement:
+            if (improvementf > max_improvement):
                 max_improvement = improvementf
                 feature = f
                 threshold = thresholdf
@@ -575,7 +680,6 @@ class Stack:
         # test is_empty() prior to call
         return self.items.pop()
 
-
 class DepthFirstTreeBuilder:
     """ Build a binary decision tree in depth-first order.
     """
@@ -592,7 +696,7 @@ class DepthFirstTreeBuilder:
 
         return
 
-    def build(self, tree, X, y):
+    def build(self, tree, X, y, n_classes, class_weight):
         """ Build a binary decision tree from the training data.
         """
 

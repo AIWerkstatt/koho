@@ -6,7 +6,7 @@
 Implementation
 ==============
 
-**Python only implementation!**
+**Python implementation with Criterion implemented in Cython!**
 
 scikit-learn compatible
 =======================

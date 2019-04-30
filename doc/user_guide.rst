@@ -9,7 +9,7 @@ User Guide
 **koho** (Hawaiian word for 'to estimate') is a **Decision Forest** **C++ library**
 with a `scikit-learn`_ compatible **Python interface**.
 
-**Python only implementation!**
+**Python implementation with Criterion implemented in Cython!**
 
 - Classification
 - Numerical (dense) data
@@ -109,8 +109,6 @@ Export a tree in a compact textual format::
 
 Persistence
 
-$: conda install cloudpickle
-
     >>> import pickle
     >>> with open("clf.pkl", "wb") as f:
     ...     pickle.dump(clf, f)
@@ -199,8 +197,9 @@ View progress with dask::
 Tested Version
 ==============
 
-``koho`` 0.0.1,
+``koho`` 0.0.2,
 python 3.7.3,
+cython 0.29.7,
 git 2.17.1,
 conda 4.6.8,
 pip 19.0.3,

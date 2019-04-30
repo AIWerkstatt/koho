@@ -11,7 +11,7 @@ based on scikit-learn's `Plot the decision surface of a decision tree on the iri
 
 """
 
-# Used koho's DecisionForestClassifier by AI Werkstatt
+# Modified using koho's DecisionForestClassifier by AI Werkstatt
 
 import numpy as np
 import matplotlib.pyplot as plt

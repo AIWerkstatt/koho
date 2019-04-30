@@ -16,7 +16,7 @@ based on scikit-learn's `classifier comparison`_ plot.
 # Code source: Gaël Varoquaux
 #              Andreas Müller
 # Modified for documentation by Jaques Grobler
-# Used koho's DecisionTreeClassifier and DecisionForestClassifier by AI Werkstatt
+# Modified using koho's DecisionTreeClassifier and DecisionForestClassifier by AI Werkstatt
 # License: BSD 3 clause
 
 import numpy as np

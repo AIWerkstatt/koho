@@ -39,7 +39,7 @@ from sklearn.utils.validation import check_X_y, check_array, check_random_state,
 from sklearn.utils.multiclass import unique_labels
 from io import StringIO
 
-from ._decision_tree_python import Tree, DepthFirstTreeBuilder
+from ._decision_tree_cython import Tree, DepthFirstTreeBuilder
 
 # ==============================================================================
 # Decision Tree Classifier
@@ -302,10 +302,9 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
                         max_depth, max_features, max_thresholds, random_state)
 
         # Create an empty tree
-        self.tree_ = Tree(self.n_classes_, self.n_features_)
-
+        self.tree_ = Tree(self.n_features_, self.n_classes_)
         # Build a decision tree from the training data X, y
-        builder.build(self.tree_, X, y)
+        builder.build(self.tree_, X, y, self.n_classes_, class_weight)
 
         # Return the classifier
         return self

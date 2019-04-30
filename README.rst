@@ -23,7 +23,7 @@ koho (TM)
 **koho** (Hawaiian word for 'to estimate') is a **Decision Forest** **C++ library**
 with a `scikit-learn`_ compatible **Python interface**.
 
-**Python only implementation!**
+**Python implementation with Criterion implemented in Cython!**
 
 - Classification
 - Numerical (dense) data
