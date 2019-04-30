@@ -1,12 +1,9 @@
 .. -*- mode: rst -*-
 
-|Travis|_ |AppVeyor|_ |Codecov|_ |CircleCI|_ |ReadTheDocs|_
+|Travis|_ |Codecov|_ |CircleCI|_ |ReadTheDocs|_
 
 .. |Travis| image:: https://travis-ci.org/AIWerkstatt/koho.svg?branch=master
 .. _Travis: https://travis-ci.org/AIWerkstatt/koho
-
-.. |AppVeyor| image:: https://ci.appveyor.com/api/projects/status/7mpfa6oulfasp99w/branch/master?svg=true
-.. _AppVeyor: https://ci.appveyor.com/project/AIWerkstatt/koho
 
 .. |Codecov| image:: https://codecov.io/gh/AIWerkstatt/koho/branch/master/graph/badge.svg
 .. _Codecov: https://codecov.io/gh/AIWerkstatt/koho
