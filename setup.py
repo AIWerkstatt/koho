@@ -66,6 +66,6 @@ setup(name='koho',
           'Programming Language :: Cython',
           'Programming Language :: C',
           'Programming Language :: C++',
-          'Operating System :: POSIX::Linux',
+          'Operating System :: POSIX :: Linux',
           'Operating System :: Unix']
       )
