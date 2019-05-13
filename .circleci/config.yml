@@ -3,11 +3,12 @@ version: 2
 jobs:
   python3:
     docker:
-      - image: circleci/python:3.6.1
+      - image: circleci/python:3.7.3
     steps:
       - checkout
       - run:
           command: |
+            apt-get update && apt-get install -y gcc g++-7
             wget https://repo.continuum.io/miniconda/Miniconda3-latest-Linux-x86_64.sh -O miniconda.sh
             chmod +x miniconda.sh && ./miniconda.sh -b -p ~/miniconda
             export PATH="~/miniconda/bin:$PATH"
