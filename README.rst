@@ -1,15 +1,12 @@
 .. -*- mode: rst -*-
 
-|Travis|_ |Codecov|_ |CircleCI|_ |ReadTheDocs|_
+|Travis|_ |Codecov|_ |ReadTheDocs|_
 
 .. |Travis| image:: https://travis-ci.org/AIWerkstatt/koho.svg?branch=master
 .. _Travis: https://travis-ci.org/AIWerkstatt/koho
 
 .. |Codecov| image:: https://codecov.io/gh/AIWerkstatt/koho/branch/master/graph/badge.svg
 .. _Codecov: https://codecov.io/gh/AIWerkstatt/koho
-
-.. |CircleCI| image:: https://circleci.com/gh/AIWerkstatt/koho.svg?style=shield&circle-token=:circle-token
-.. _CircleCI: https://circleci.com/gh/AIWerkstatt/koho
 
 .. |ReadTheDocs| image:: https://readthedocs.org/projects/koho/badge/?version=latest
 .. _ReadTheDocs: https://koho.readthedocs.io/en/latest/

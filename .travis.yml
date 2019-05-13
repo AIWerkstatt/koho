@@ -11,13 +11,12 @@ matrix:
   include:
     - env: PYTHON_VERSION="3.7" NUMPY_VERSION="*" SCIPY_VERSION="*" SKLEARN_VERSION="*"
 
-before_install:
-  - sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
-  - sudo apt-get update -qq
-
 install:
   # install gcc
-  - sudo apt-get install -qq gcc-7
+  - sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+  - sudo apt-get update -y
+  - sudo apt-get install gcc-7 g++-7 -y
+  - gcc --version
   # install miniconda
   - deactivate
   - wget https://repo.continuum.io/miniconda/Miniconda3-latest-Linux-x86_64.sh -O miniconda.sh
