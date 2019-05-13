@@ -26,7 +26,7 @@ if '--use-cython' in sys.argv:
                   sources=['koho/sklearn/_decision_tree_cpp.pyx',
                            'koho/cpp/random_number_generator.cpp',
                            'koho/cpp/decision_tree.cpp'],
-                  extra_compile_args=['-std=c++17'],
+                  #extra_compile_args=['-std=c++17'], not supported by TravisCI & CircleCI
                   language='c++')])
 else:
     cython_extensions = [
@@ -34,7 +34,7 @@ else:
                   sources=['koho/sklearn/_decision_tree_cpp.cpp',
                            'koho/cpp/random_number_generator.cpp',
                            'koho/cpp/decision_tree.cpp'],
-                  extra_compile_args=['-std=c++17'],
+                  #extra_compile_args=['-std=c++17'], not supported by TravisCI & CircleCI
                   language='c++')]
 
 setup(name='koho',
