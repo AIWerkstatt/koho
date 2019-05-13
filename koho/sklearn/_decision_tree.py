@@ -3,6 +3,7 @@
 
 - Classification
 - Numerical (dense) data
+- Missing values (Not Missing At Random (NMAR))
 - Class balancing
 - Multi-Class
 - Single-Output
@@ -23,23 +24,23 @@ Python interface compatible with scikit-learn.
 # Author: AI Werkstatt (TM)
 # (C) Copyright 2019, AI Werkstatt (TM) www.aiwerkstatt.com. All rights reserved.
 
-# Compliant with scikit-learn's developer's guide:
+# Scikit-learn compatible
 # http://scikit-learn.org/stable/developers
-# trying to be consistent with scikit-learn's sklearn.tree module implementation
+# Trying to be consistent with scikit-learn's decision tree module
 # https://github.com/scikit-learn/scikit-learn
-# which is further documented in
+# Basic concepts for the implementation of the classifier are based on
 # G. Louppe, “Understanding Random Forests”, PhD Thesis, 2014
-# and from which the basic principles are implemented.
 
 import numbers
 import numpy as np
 import scipy
 from sklearn.base import BaseEstimator, ClassifierMixin
-from sklearn.utils.validation import check_X_y, check_array, check_random_state, check_is_fitted
+from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
 from sklearn.utils.multiclass import unique_labels
 from io import StringIO
 
-from ._decision_tree_cython import Tree, DepthFirstTreeBuilder
+# Cython binding for C++ implementation
+from ._decision_tree_cpp import RandomState, Tree, DepthFirstTreeBuilder
 
 # ==============================================================================
 # Decision Tree Classifier
@@ -51,43 +52,43 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
 
     Parameters
     ----------
-    class_balance : string 'balanced' or None, optional (default='balanced')
+    class_balance : str 'balanced' or None, optional (default='balanced')
         Weighting of the classes.
 
             - If 'balanced', then the values of y are used to automatically adjust class weights
               inversely proportional to class frequencies in the input data.
             - If None, all classes are supposed to have weight one.
 
-    max_depth : integer or None, optional (default=None)
+    max_depth : int or None, optional (default=None)
         The maximum depth of the tree.
 
             The depth of the tree is expanded until the specified maximum depth of the tree is reached
             or all leaves are pure or no further impurity improvement can be achieved.
             - If None, the maximum depth of the tree is set to max long (2^31-1).
 
-    max_features : int, float, string or None, optional (default=None)
+    max_features : int, float, str or None, optional (default=None)
         Note: only to be used by Decision Forest
 
         The number of random features to consider when looking for the best split at each node.
 
-            - If int, then consider `max_features` features.
-            - If float, then `max_features` is a percentage and
-              `int(max_features * n_features)` features are considered.
-            - If "auto", then `max_features=sqrt(n_features)`.
-            - If "sqrt", then `max_features=sqrt(n_features)`.
-            - If "log2", then `max_features=log2(n_features)`.
-            - If None, then `max_features=n_features` considering all features in random order.
+            - If int, then consider ``max_features`` features.
+            - If float, then ``max_features`` is a percentage and
+              int(``max_features`` * n_features) features are considered.
+            - If 'auto', then ``max_features`` = sqrt(n_features).
+            - If 'sqrt', then ``max_features`` = sqrt(n_features).
+            - If 'log2', then ``max_features`` = log2(n_features).
+            - If None, then ``max_features`` = n_features considering all features in random order.
 
         Note: the search for a split does not stop until at least
         one valid partition of the node samples is found up to the point that
         all features have been considered,
         even if it requires to effectively inspect more than ``max_features`` features.
 
-        `Decision Tree`: ``max_features=None`` and ``max_thresholds=None``
+        `Decision Tree`: ``max_features`` = None and ``max_thresholds`` = None
 
-        `Random Tree`: ``max_features<n_features`` and ``max_thresholds=None``
+        `Random Tree`: ``max_features`` < n_features and ``max_thresholds`` = None
 
-    max_thresholds : 1 or None, optional (default=None)
+    max_thresholds : int 1 or None, optional (default=None)
         Note: only to be used by Decision Forest
 
         The number of random thresholds to consider when looking for the best split at each node.
@@ -95,13 +96,26 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
             - If 1, then consider 1 random threshold, based on the `Extreme Randomized Tree` formulation.
             - If None, then all thresholds, based on the mid-point of the node samples, are considered.
 
-        `Extreme Randomized Trees (ET)`: ``max_thresholds=1``
+        `Extreme Randomized Trees (ET)`: ``max_thresholds`` = 1
 
-        `Totally Randomized Trees`: ``max_features=1`` and ``max_thresholds=1``,
+        `Totally Randomized Trees`: ``max_features`` = 1 and ``max_thresholds`` = 1,
         very similar to `Perfect Random Trees (PERT)`.
 
+    missing_values : str 'NMAR' or None, optional (default=None)
+        Handling of missing values.
+
+            - If 'NMAR' (Not Missing At Random), then during training: the split criterion considers missing values
+              as another category and samples with missing values are passed to either the left or the right child
+              depending on which option provides the best split,
+              and then during testing: if the split criterion includes missing values,
+              a missing value is dealt with accordingly (passed to left or right child),
+              or if the split criterion does not include missing values,
+              a missing value at a split criterion is dealt with by combining the results from both children
+              proportionally to the number of samples that are passed to the children during training.
+            - If None, an error is raised if one of the features has a missing value.
+              An option is to use imputation (fill-in) of missing values prior to using the decision tree classifier.
+
     random_state : int or None, optional (default=None)
-        Note: only to be used by Decision Forest
 
         A random state to control the pseudo number generation and repetitiveness of fit().
 
@@ -119,7 +133,7 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
     n_features_ : int
         The number of features.
 
-    max_features_ : int,
+    max_features_ : int
         The inferred value of max_features.
 
     tree_ : tree object
@@ -131,8 +145,8 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
         total reduction of the criterion brought by that feature.
     """
 
-    # We use "class_balance" as the hyperparameter name instead of “class_weight”
-    # The “class_weight” hyperparameter name is recognized by "check_estimator()"
+    # We use 'class_balance' as the hyperparameter name instead of 'class_weight'
+    # The “class_weight” hyperparameter name is recognized by 'check_estimator()'
     # and the test “check_class_weight_ classifiers()” is performed that uses the
     # dict parameter and requires for a decision tree the “min_weight_fraction_leaf”
     # hyperparameter to be implemented to pass the test.
@@ -142,8 +156,9 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
                  max_depth=None,
                  max_features=None,
                  max_thresholds=None,
+                 missing_values=None,
                  random_state=None):
-        """Create a new decision tree classifier and initialize it with hyperparameters.
+        """ Create a new decision tree classifier and initialize it with hyperparameters.
         """
 
         # Hyperparameters
@@ -151,13 +166,15 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
         self.max_depth = max_depth
         self.max_features = max_features
         self.max_thresholds = max_thresholds
-        # Random State
+        self.missing_values = missing_values
+
+        # Random Number Generator
         self.random_state = random_state
 
         return
 
     def fit(self, X, y):
-        """Build a decision tree classifier from the training data.
+        """ Build a decision tree classifier from the training data.
 
         Parameters
         ----------
@@ -178,11 +195,14 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
 
         # Check X, y
 
-        X, y = check_X_y(X, y)
+        if self.missing_values == 'NMAR':
+            X, y = check_X_y(X, y, dtype=np.float64, order="C", force_all_finite='allow-nan')
+        else:
+            X, y = check_X_y(X, y, dtype=np.float64, order="C")
 
         # Determine attributes from training data
 
-        self.classes_ = unique_labels(y)  # Keep to raise required ValueError tested by "check_estimator()"
+        self.classes_ = unique_labels(y)  # Keep to raise required ValueError tested by 'check_estimator()'
         self.classes_, y = np.unique(y, return_inverse=True)  # Encode y from classes to integers
         self.n_classes_ = self.classes_.shape[0]
         n_samples, self.n_features_ = X.shape
@@ -190,7 +210,7 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
         # Calculate class weights
         # so that n_samples == sum of all weighted samples
         # Note that scikit-learn provides:
-        # "compute_class_weight(self.class_balance, self.classes_, y)"
+        # 'compute_class_weight(self.class_balance, self.classes_, y)'
 
         mean_samples_per_class = y.shape[0] / self.n_classes_
         if self.class_balance is not None:
@@ -206,7 +226,7 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
                                      % self.class_balance)
             else:
                 raise TypeError("class_balance: %s is not supported."
-                                 % self.class_balance)
+                                % self.class_balance)
         else:
             class_weight = np.ones(self.classes_.shape[0], dtype=np.float64)
 
@@ -289,22 +309,47 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
         else:
             max_thresholds = 0
 
+        # missing values
+
+        if self.missing_values is not None:
+            if isinstance(self.missing_values, str):
+                if self.missing_values in ['NMAR']:
+                    missing_values = self.missing_values
+                else:
+                    raise ValueError("missing_values: unsupported string \'%s\', "
+                                     "only 'NMAR' is supported."
+                                     % self.missing_values)
+            else:
+                raise TypeError("missing_values: %s is not supported."
+                                % self.missing_values)
+        else:
+            missing_values = 'None'
+            if np.any(np.isnan(X)):
+                raise ValueError("missing_values: None, but X contains np.NaN.")
+
         # Random Number Generator
 
-        random_state = check_random_state(self.random_state)
+        random_state = RandomState(self.random_state)
 
         # Build decision tree
         # -------------------
 
         # Initialize the tree builder
         builder = DepthFirstTreeBuilder(
-                        self.n_classes_, self.n_features_, n_samples, class_weight,
-                        max_depth, max_features, max_thresholds, random_state)
+            self.n_classes_, self.n_features_, n_samples, class_weight,
+            max_depth, max_features, max_thresholds, missing_values, random_state)
 
         # Create an empty tree
-        self.tree_ = Tree(self.n_features_, self.n_classes_)
+        self.tree_ = Tree(self.n_classes_, self.n_features_)
+
         # Build a decision tree from the training data X, y
-        builder.build(self.tree_, X, y, self.n_classes_, class_weight)
+
+        # workaround cython not supporting read-only memory view
+        # https://github.com/cython/cython/issues/1605
+        if not X.flags.writeable:
+            X = X.copy()
+
+        builder.build(self.tree_, X, y)
 
         # Return the classifier
         return self
@@ -343,14 +388,17 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
         Returns
         -------
         p : array, shape = [n_samples, n_classes]
-            The predicted classes probablities for the test input samples.
+            The predicted classes probabilities for the test input samples.
         """
 
         # Check that fit has been called
         check_is_fitted(self, ['tree_'])
 
         # Check X
-        X = check_array(X)
+        if self.missing_values == 'NMAR':
+            X = check_array(X, dtype=np.float64, order="C", force_all_finite='allow-nan')
+        else:
+            X = check_array(X, dtype=np.float64, order="C")
 
         n_features = X.shape[1]
         if self.n_features_ != n_features:
@@ -359,6 +407,12 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
                              % (n_features, self.n_features_))
 
         # Predict classes probabilities
+
+        # workaround cython not supporting read-only memory view
+        # https://github.com/cython/cython/issues/1605
+        if not X.flags.writeable:
+            X = X.copy()
+
         proba = self.tree_.predict(X)
 
         return proba
@@ -375,24 +429,24 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
         return self.tree_.calculate_feature_importances()
 
     def export_graphviz(self, feature_names=None, class_names=None, rotate=False):
-        """Export of a decision tree in GraphViz dot format.
+        """ Export of a decision tree in GraphViz dot format.
 
         Parameters
         ----------
-        feature_names : list of strings, optional (default=None)
+        feature_names : list of str, optional (default=None)
             Names of each of the features.
 
-        class_names : list of strings, optional (default=None)
+        class_names : list of str, optional (default=None)
             Names of each of the classes in ascending numerical order.
             Classes are represented as integers: 0, 1, ... (n_classes-1).
             If y consists of class labels, those class labels need to be provided as class_names again.
 
         rotate : bool, optional (default=False)
-            When set to ``True``, orient tree left to right rather than top-down.
+            When set to True, orient tree left to right rather than top-down.
 
         Returns
         -------
-        dot_data : string
+        dot_data : str
             String representation of the decision tree classifier in GraphViz dot format.
         """
 
@@ -403,6 +457,7 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
             left_child = tree.get_node_left_child(node_id)
             right_child = tree.get_node_right_child(node_id)
             feature = tree.get_node_feature(node_id)
+            NA = tree.get_node_NA(node_id)
             threshold = tree.get_node_threshold(node_id)
             histogram = tree.get_node_histogram(node_id)
             impurity = tree.get_node_impurity(node_id)
@@ -421,7 +476,7 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
             color = '#' + ''.join('{:02X}'.format(a) for a in [r, g, b, alpha])  # #RRGGBBAA hex format
 
             # Leaf node
-            if left_child is None:
+            if left_child == 0:
                 # leaf nodes do no have any children
                 # so we only need to test for one of the children
 
@@ -439,11 +494,11 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
                 # modify test feature <= threshold (default) vs feature > threshold accordingly
 
                 order = True
-                test_type = 0   # 0: feature <= threshold (default)
-                                # 1: feature >  threshold, when left and right children are switched
+                test_type = 0  # 0: feature <= threshold (default)
+                # 1: feature >  threshold, when left and right children are switched
 
+                change = False
                 if order:
-                    change = False
                     # Left Child Prediction
                     lc_histogram = tree.get_node_histogram(left_child)
                     lc_c = np.argmax(lc_histogram)
@@ -457,11 +512,11 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
                     # Determine if left_child and right_child should be switched based on predictions
                     if lc_c > rc_c:  # assign left child to lower class index
                         change = True
-                    elif lc_c == rc_c:           # if class indices are the same for left and right children
-                        if lc_c == 0:            # for the first class index = 0
+                    elif lc_c == rc_c:  # if class indices are the same for left and right children
+                        if lc_c == 0:  # for the first class index = 0
                             if lc_p_c < rc_p_c:  # assign left child to higher class probability
                                 change = True
-                        else:                    # for all other class indices > 0
+                        else:  # for all other class indices > 0
                             if lc_p_c > rc_p_c:  # assign left child to lower class probability
                                 change = True
                     if change:
@@ -477,32 +532,47 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
                 n_right_child = sum(tree.get_node_histogram(right_child)) / n_root
 
                 max_width = 10
+
+                # Node
+                dot_data.write('%d [label=\"' % node_id)
+                # - feature
+                dot_data.write('%s' % feature_name)
+                # - threshold
+                if not np.isnan(threshold):
+                    if test_type == 0:
+                        dot_data.write(' <= %s' % threshold)
+                    else:  # test_type == 1
+                        dot_data.write(' > %s' % threshold)
+                # - NA
+                if NA != -1:
+                    if change == False:
+                        if NA == 0:  # left
+                            dot_data.write(' NA')
+                        if NA == 1:  # right
+                            dot_data.write(' not NA')
+                    else:  # test_type == 1
+                        if NA == 0:  # right
+                            dot_data.write(' not NA')
+                        if NA == 1:  # left
+                            dot_data.write(' NA')
+
+                # - histogram
                 if node_id == 0:  # Root node with legend
-                    # Node
-                    if test_type == 0:
-                        dot_data.write('%d [label=\"%s <= %s\\np(class) = %s\\nclass, n = %s\", fillcolor=\"%s\"] ;\n'
-                                       % (node_id, feature_name, threshold, p_c, int(round(n, 0)), color))
-                    else:  # test_type == 1
-                        dot_data.write('%d [label=\"%s > %s\\np(class) = %s\\nclass, n = %s\", fillcolor=\"%s\"] ;\n'
-                                       % (node_id, feature_name, threshold, p_c, int(round(n, 0)), color))
-                    # Edges
-                    dot_data.write('%d -> %d [penwidth=%f, headlabel="True", labeldistance=2.5, labelangle=%d] ;\n'
-                                   % (node_id, left_child, max_width * n_left_child, -45 if rotate else 45))
-                    dot_data.write('%d -> %d [penwidth=%f, headlabel="False", labeldistance=2.5, labelangle=%d] ;\n'
-                                   % (node_id, right_child, max_width * n_right_child, 45 if rotate else -45))
+                    dot_data.write('\\np(class) = %s\\nclass, n = %s\"' % (p_c, int(round(n, 0))))
                 else:
-                    # Node
-                    if test_type == 0:
-                        dot_data.write('%d [label=\"%s <= %s\\n%s\", fillcolor=\"%s\"] ;\n'
-                                       % (node_id, feature_name, threshold, p_c, color))
-                    else:  # test_type == 1
-                        dot_data.write('%d [label=\"%s > %s\\n%s\", fillcolor=\"%s\"] ;\n'
-                                       % (node_id, feature_name, threshold, p_c, color))
-                    # Edges
-                    dot_data.write('%d -> %d [penwidth=%f] ;\n'
-                                   % (node_id, left_child, max_width * n_left_child))
-                    dot_data.write('%d -> %d [penwidth=%f] ;\n'
-                                   % (node_id, right_child, max_width * n_right_child))
+                    dot_data.write('\\n%s\"' % p_c)
+                dot_data.write(', fillcolor=\"%s\"] ;\n' % color)
+
+                # Edges
+                # - left child
+                dot_data.write('%d -> %d [penwidth=%f' % (node_id, left_child, max_width * n_left_child))
+                if node_id == 0:  # Root node with legend
+                    dot_data.write(', headlabel="True", labeldistance=2.5, labelangle=%d' % (-45 if rotate else 45))
+                dot_data.write('] ;\n')
+                # - right child
+                dot_data.write('%d -> %d [penwidth=%f] ;\n' % (node_id, right_child, max_width * n_right_child))
+                # layout problems with legend true and false depending on tree size
+                # no need to define false when true is defined
 
                 # process the children's sub trees recursively
                 process_tree_recursively(tree, left_child)
@@ -588,26 +658,28 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
         return dot_data.getvalue()
 
     def export_text(self):
-        """Export of a decision tree in a simple text format.
+        """ Export of a decision tree in a simple text format.
 
         Returns
         -------
-        data : string
+        data : str
             String representation of the decision tree classifier in a simple text format.
         """
 
         def process_tree_recursively(tree, node_id):
-            """ Process tree recursively node by node and provide simple text format for node."""
+            """ Process tree recursively node by node and provide simple text format for node.
+            """
 
             # Current node
             left_child = tree.get_node_left_child(node_id)
             right_child = tree.get_node_right_child(node_id)
             feature = tree.get_node_feature(node_id)
-            threshold = tree.get_node_threshold(node_id)
+            NA = tree.get_node_NA(node_id)
+            threshold = round(tree.get_node_threshold(node_id), 3)
             histogram = [int(x) if x % 1 == 0 else round(float(x), 2) for x in tree.get_node_histogram(node_id)]
 
             # Leaf node
-            if left_child is None:
+            if left_child == 0:
                 # leaf nodes do no have any children
                 # so we only need to test for one of the children
 
@@ -619,7 +691,12 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
 
                 data.write('%d' % node_id)
                 data.write(' X[%d]' % feature)
-                data.write('<=%s' % round(float(threshold), 2))
+                if not np.isnan(threshold):
+                    data.write('<=%s' % threshold)
+                if NA == 0:
+                    data.write(' NA')
+                if NA == 1:
+                    data.write(' not NA')
                 data.write(' %s; ' % histogram)
 
                 data.write('%d->%d; ' % (node_id, left_child))

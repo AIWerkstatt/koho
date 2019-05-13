@@ -13,4 +13,3 @@ Classification
 
    DecisionTreeClassifier
    DecisionForestClassifier
-

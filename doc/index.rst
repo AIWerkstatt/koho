@@ -6,8 +6,6 @@ Welcome to koho\ |trade|'s documentation!
 **koho** (Hawaiian word for 'to estimate') is a **Decision Forest** **C++ library**
 with a `scikit-learn`_ compatible **Python interface**.
 
-**Python implementation with Criterion implemented in Cython!**
-
 .. _`scikit-learn`: http://scikit-learn.org
 
 ----------
@@ -26,6 +24,7 @@ with a `scikit-learn`_ compatible **Python interface**.
 
    user_guide
    python_api
+   C++ API <_static/cpp/html/index.html#://>
    implementation
 
 .. toctree::
@@ -49,6 +48,11 @@ Documentation of the ``koho`` package.
 -------------------------------
 
 Documentation of the ``koho`` Python interface.
+
+`C++ API <_static/cpp/html/index.html>`_
+----------------------------------------
+
+Documentation of the ``koho`` C++ interface.
 
 `Implementation <implementation.html>`_
 ---------------------------------------

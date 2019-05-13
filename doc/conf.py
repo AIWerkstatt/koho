@@ -12,15 +12,23 @@
 # All configuration values have a default; values that are commented out
 # serve to show the default.
 
-import sys
-import os
+import sys, os
 
 import sphinx_rtd_theme
 
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
-#sys.path.insert(0, os.path.abspath('.'))
+
+sys.path.append(os.path.abspath(os.pardir))
+
+# Doxygen integration
+import subprocess
+subprocess.call('cd ../koho/cpp ; doxygen', shell=True)
+# koho/cpp$: doxygen
+import shutil
+shutil.rmtree('_static/cpp/html/', ignore_errors=True)
+shutil.copytree('../koho/cpp/html', '_static/cpp/html')
 
 # -- General configuration ------------------------------------------------
 
@@ -36,7 +44,8 @@ extensions = [
     'sphinx.ext.doctest',
     'sphinx.ext.intersphinx',
     'sphinx.ext.viewcode',
-    'numpydoc',
+    'sphinx.ext.mathjax', # math
+    'sphinx.ext.napoleon', # numpy docstrings
     'sphinx_gallery.gen_gallery',
 ]
 

@@ -16,17 +16,26 @@ with open(os.path.join('koho', '_version.py')) as f:
     exec(f.read())
 VERSION = __version__
 
-# Cython
+# C++ implementation with Cython bindings
 
 if '--use-cython' in sys.argv:
     sys.argv.remove('--use-cython')
     from Cython.Build import cythonize
-    cython_extensions = cythonize('koho/sklearn/_decision_tree_cython.pyx')
+    cython_extensions = cythonize([
+        Extension(name='koho.sklearn._decision_tree_cpp',
+                  sources=['koho/sklearn/_decision_tree_cpp.pyx',
+                           'koho/cpp/random_number_generator.cpp',
+                           'koho/cpp/decision_tree.cpp'],
+                  extra_compile_args=['-std=c++17'],
+                  language='c++')])
 else:
     cython_extensions = [
-        Extension(name='koho.sklearn._decision_tree_cython',
-                  sources=['koho/sklearn/_decision_tree_cython.c'],
-                  language='c')]
+        Extension(name='koho.sklearn._decision_tree_cpp',
+                  sources=['koho/sklearn/_decision_tree_cpp.cpp',
+                           'koho/cpp/random_number_generator.cpp',
+                           'koho/cpp/decision_tree.cpp'],
+                  extra_compile_args=['-std=c++17'],
+                  language='c++')]
 
 setup(name='koho',
       version=VERSION,
@@ -46,15 +55,17 @@ setup(name='koho',
       install_requires=['numpy', 'scipy', 'scikit-learn'],
       extras_require={
           'tests': ['pytest', 'pytest-cov'],
-          'docs': ['sphinx', 'sphinx-gallery', 'sphinx_rtd_theme', 'numpydoc', 'matplotlib']},
+          'docs': ['sphinx', 'sphinx-gallery', 'sphinx_rtd_theme', 'matplotlib']},
       classifiers=[
           'Topic :: Scientific/Engineering :: Artificial Intelligence',
           'Intended Audience :: Science/Research',
           'Natural Language :: English',
           'License :: OSI Approved :: BSD License',
-          'Development Status :: 1 - Planning',
+          'Development Status :: 5 - Production/Stable',
           'Programming Language :: Python :: 3.7',
           'Programming Language :: Cython',
           'Programming Language :: C',
+          'Programming Language :: C++',
+          'Operating System :: POSIX::Linux',
           'Operating System :: Unix']
       )

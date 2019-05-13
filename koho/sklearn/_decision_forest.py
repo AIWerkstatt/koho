@@ -11,20 +11,24 @@ Python interface compatible with scikit-learn.
 # Author: AI Werkstatt (TM)
 # (C) Copyright 2019, AI Werkstatt (TM) www.aiwerkstatt.com. All rights reserved.
 
-# Compliant with scikit-learn's developer's guide:
+# Scikit-learn compatible
 # http://scikit-learn.org/stable/developers
+# Trying to be consistent with scikit-learn's ensemble module
+# https://github.com/scikit-learn/scikit-learn
+# Basic concepts for the implementation of the classifier are based on
+# G. Louppe, “Understanding Random Forests”, PhD Thesis, 2014
 
 import numbers
 import numpy as np
 from warnings import warn
 from sklearn.base import BaseEstimator, ClassifierMixin
-from sklearn.utils.validation import check_X_y, check_array, check_random_state, check_is_fitted
+from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
 from sklearn.utils.multiclass import unique_labels
 from sklearn.utils._joblib import Parallel, delayed
 
 from ._decision_tree import DecisionTreeClassifier
-
-MAX_INT = np.iinfo(np.int32).max  # used for random seed generation
+# Cython binding for C++ implementation
+from ._decision_tree_cpp import RandomState
 
 # ==============================================================================
 # Decision Forest Classifier
@@ -32,11 +36,12 @@ MAX_INT = np.iinfo(np.int32).max  # used for random seed generation
 
 
 def _DecisionForestClassifier_bagging_fit_and_oob_score(estimator, oob_score, X, y, n_samples, n_classes, data_seed):
-    """Parallel processing helper function for DecisionForestClassifier's fit function."""
+    """ Parallel processing helper function for DecisionForestClassifier's fit function.
+    """
 
     # Build a decision tree from the bootstrapped training data
     # drawing random samples with replacement
-    random_state = np.random.RandomState(data_seed)
+    random_state = RandomState(data_seed)
     idx = random_state.randint(0, n_samples, size=n_samples)  # includes 0, excludes n_samples
     # make sure training data includes all classes
     while np.unique(y[idx]).shape[0] < n_classes:
@@ -58,10 +63,10 @@ class DecisionForestClassifier(BaseEstimator, ClassifierMixin):
 
     Parameters
     ----------
-    n_estimators : integer, optional (default=10)
+    n_estimators : int, optional (default=100)
         The number of decision trees in the forest.
 
-    bootstrap : boolean, optional (default=True)
+    bootstrap : boolean, optional (default=False)
         Whether bootstrap samples are used when building trees.
         Out-of-bag samples are used to estimate the generalization accuracy.
 
@@ -69,49 +74,63 @@ class DecisionForestClassifier(BaseEstimator, ClassifierMixin):
         Whether to use out-of-bag samples to estimate
         the generalization accuracy.
 
-    class_balance : string 'balanced' or None, optional (default='balanced')
+    class_balance : str 'balanced' or None, optional (default='balanced')
         Weighting of the classes.
 
             - If 'balanced', then the values of y are used to automatically adjust class weights
               inversely proportional to class frequencies in the input data.
             - If None, all classes are supposed to have weight one.
 
-    max_depth : integer or None, optional (default=3)
+    max_depth : int or None, optional (default=3)
         The maximum depth of the tree.
 
             - If None, the depth of the tree is expanded until all leaves
               are pure or no further impurity improvement can be achieved.
 
-    max_features : int, float, string or None, optional (default=None)
+    max_features : int, float, str or None, optional (default=None)
         The number of random features to consider when looking for the best split at each node.
 
-            - If int, then consider `max_features` features.
-            - If float, then `max_features` is a percentage and
-              `int(max_features * n_features)` features are considered.
-            - If "auto", then `max_features=sqrt(n_features)`.
-            - If "sqrt", then `max_features=sqrt(n_features)`.
-            - If "log2", then `max_features=log2(n_features)`.
-            - If None, then `max_features=n_features` considering all features in random order.
+            - If int, then consider ``max_features`` features.
+            - If float, then ``max_features`` is a percentage and
+              int(``max_features`` * n_features) features are considered.
+            - If 'auto', then ``max_features`` = sqrt(n_features).
+            - If 'sqrt', then ``max_features`` = sqrt(n_features).
+            - If 'log2', then ``max_features`` = log2(n_features).
+            - If None, then ``max_features`` = n_features considering all features in random order.
 
         Note: the search for a split does not stop until at least
         one valid partition of the node samples is found up to the point that
         all features have been considered,
         even if it requires to effectively inspect more than ``max_features`` features.
 
-        `Decision Tree`: ``max_features=None`` and ``max_thresholds=None``
+        `Decision Tree`: ``max_features`` = None and ``max_thresholds`` = None
 
-        `Random Tree`: ``max_features<n_features`` and ``max_thresholds=None``
+        `Random Tree`: ``max_features`` < n_features and ``max_thresholds`` = None
 
-    max_thresholds : 1 or None, optional (default=None)
+    max_thresholds : int 1 or None, optional (default=None)
         The number of random thresholds to consider when looking for the best split at each node.
 
             - If 1, then consider 1 random threshold, based on the `Extreme Randomized Tree` formulation.
             - If None, then all thresholds, based on the mid-point of the node samples, are considered.
 
-        `Extreme Randomized Trees (ET)`: ``max_thresholds=1``
+        `Extreme Randomized Trees (ET)`: ``max_thresholds`` = 1
 
-        `Totally Randomized Trees`: ``max_features=1`` and ``max_thresholds=1``,
+        `Totally Randomized Trees`: ``max_features`` = 1 and ``max_thresholds`` = 1,
         very similar to `Perfect Random Trees (PERT)`.
+
+    missing_values : str 'NMAR' or None, optional (default=None)
+        Handling of missing values, defined as np.NaN.
+
+            - If 'NMAR' (Not Missing At Random), then during training: the split criterion considers missing values
+              as another category and samples with missing values are passed to either the left or the right child
+              depending on which option provides the best split,
+              and then during testing: if the split criterion includes missing values,
+              a missing value is dealt with accordingly (passed to left or right child),
+              or if the split criterion does not include missing values,
+              a missing value at a split criterion is dealt with by combining the results from both children
+              proportionally to the number of samples that are passed to the children during training.
+            - If None, an error is raised if one of the features has a missing value.
+              An option is to use imputation (fill-in) of missing values prior to using the decision tree classifier.
 
     random_state : int or None, optional (default=None)
         A random state to control the pseudo number generation and repetitiveness of fit().
@@ -119,7 +138,7 @@ class DecisionForestClassifier(BaseEstimator, ClassifierMixin):
             - If int, random_state is the seed used by the random number generator;
             - If None, the random number generator is seeded with the current system time.
 
-    n_jobs : integer, optional (default=None)
+    n_jobs : int, optional (default=None)
         The number of jobs to run in parallel for both `fit` and `predict`.
 
             - None means 1.
@@ -148,8 +167,8 @@ class DecisionForestClassifier(BaseEstimator, ClassifierMixin):
         Score of the training dataset obtained using an out-of-bag estimate.
     """
 
-    # We use "class_balance" as the hyperparameter name instead of “class_weight”
-    # The “class_weight” hyperparameter name is recognized by "check_estimator()"
+    # We use 'class_balance' as the hyperparameter name instead of “class_weight”
+    # The “class_weight” hyperparameter name is recognized by 'check_estimator()'
     # and the test “check_class_weight_ classifiers()” is performed that uses the
     # dict parameter and requires for a decision tree the “min_weight_fraction_leaf”
     # hyperparameter to be implemented to pass the test.
@@ -162,9 +181,10 @@ class DecisionForestClassifier(BaseEstimator, ClassifierMixin):
                  max_depth=3,  # pass through hyperparameter to decision trees
                  max_features='auto',
                  max_thresholds=None,
+                 missing_values=None,
                  random_state=None,
                  n_jobs=None):
-        """Create a new decision forest classifier and initialize it with hyperparameters.
+        """ Create a new decision forest classifier and initialize it with hyperparameters.
         """
 
         # Hyperparameters
@@ -175,6 +195,7 @@ class DecisionForestClassifier(BaseEstimator, ClassifierMixin):
         self.max_depth = max_depth
         self.max_features = max_features
         self.max_thresholds = max_thresholds
+        self.missing_values = missing_values
         # Random Number Generator
         self.random_state = random_state
         # Parallel Processing
@@ -183,7 +204,7 @@ class DecisionForestClassifier(BaseEstimator, ClassifierMixin):
         return
 
     def fit(self, X, y):
-        """Build a decision forest classifier based on decision tree classifiers from the training data.
+        """ Build a decision forest classifier based on decision tree classifiers from the training data.
 
         Parameters
         ----------
@@ -204,11 +225,14 @@ class DecisionForestClassifier(BaseEstimator, ClassifierMixin):
 
         # Check X, y
 
-        X, y = check_X_y(X, y)
+        if self.missing_values == 'NMAR':
+            X, y = check_X_y(X, y, dtype=np.float64, order="C", force_all_finite='allow-nan')
+        else:
+            X, y = check_X_y(X, y, dtype=np.float64, order="C")
 
         # Determine attributes from training data
 
-        self.classes_ = unique_labels(y)  # Keep to raise required ValueError tested by "check_estimator()"
+        self.classes_ = unique_labels(y)  # Keep to raise required ValueError tested by 'check_estimator()'
         self.classes_, y = np.unique(y, return_inverse=True)  # Encode y from classes to integers
         self.n_classes_ = self.classes_.shape[0]
         n_samples, self.n_features_ = X.shape
@@ -222,7 +246,7 @@ class DecisionForestClassifier(BaseEstimator, ClassifierMixin):
 
         if self.n_estimators < 1:
             raise ValueError("n_estimators: %s < 1, "
-                            "but a decsion forest requires to have at least 1 decision tree."
+                             "but a decsion forest requires to have at least 1 decision tree."
                              % self.n_estimators)
 
         # bootstrap
@@ -240,12 +264,12 @@ class DecisionForestClassifier(BaseEstimator, ClassifierMixin):
 
         # Random Number Generator
 
-        random_state = check_random_state(self.random_state)
+        random_state = RandomState(self.random_state)
 
         # Create explicitly different seeds for the decision trees
         # to avoid building the same tree over and over again for the entire decision forest
         # when decision trees are build in parallel.
-        algo_seeds = random_state.randint(0, MAX_INT, size=self.n_estimators)
+        algo_seeds = random_state.randint(0, random_state.MAX_INT, size=self.n_estimators)
 
         # Build a decision forest
         # -----------------------
@@ -257,6 +281,7 @@ class DecisionForestClassifier(BaseEstimator, ClassifierMixin):
                                                max_depth=self.max_depth,
                                                max_features=self.max_features,
                                                max_thresholds=self.max_thresholds,
+                                               missing_values=self.missing_values,
                                                random_state=algo_seeds[e])
             estimators.append(estimator)
 
@@ -276,7 +301,7 @@ class DecisionForestClassifier(BaseEstimator, ClassifierMixin):
             # Different seeds for algorithm and data (bagging)
             # to avoid building the same trees multiple times
             # when the same seed comes up again.
-            data_seeds = random_state.randint(0, MAX_INT, size=self.n_estimators)
+            data_seeds = random_state.randint(0, random_state.MAX_INT, size=self.n_estimators)
 
             # embarrassing parallelism
             ps = []
@@ -366,8 +391,11 @@ class DecisionForestClassifier(BaseEstimator, ClassifierMixin):
         # Check that fit has been called
         check_is_fitted(self, ['estimators_'])
 
-        # Check test data
-        X = check_array(X)
+        # Check X
+        if self.missing_values == 'NMAR':
+            X = check_array(X, dtype=np.float64, order="C", force_all_finite='allow-nan')
+        else:
+            X = check_array(X, dtype=np.float64, order="C")
 
         n_samples, n_features = X.shape
         if self.n_features_ != n_features:
