@@ -51,7 +51,7 @@ setup(name='koho',
       long_description=read("README.rst"),
       zip_safe=False,  # the package can run out of an .egg file
       ext_modules = cython_extensions,
-      package_data={'': ['*.pyx', '*.c']},
+      package_data={'': ['*.pyx', '*.cpp', '*.h', 'cpp/utilities.h']},
       install_requires=['numpy', 'scipy', 'scikit-learn'],
       extras_require={
           'tests': ['pytest', 'pytest-cov'],
