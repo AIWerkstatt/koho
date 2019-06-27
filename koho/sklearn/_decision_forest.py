@@ -20,9 +20,11 @@ Python interface compatible with scikit-learn.
 
 import numbers
 import numpy as np
+import operator
+from functools import reduce
 from warnings import warn
-from sklearn.base import BaseEstimator, ClassifierMixin
-from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
+from sklearn.base import BaseEstimator, ClassifierMixin, MultiOutputMixin
+from sklearn.utils.validation import check_X_y, check_array, check_is_fitted, check_consistent_length
 from sklearn.utils.multiclass import unique_labels
 from sklearn.utils._joblib import Parallel, delayed
 
@@ -35,7 +37,7 @@ from ._decision_tree_cpp import RandomState
 # ==============================================================================
 
 
-def _DecisionForestClassifier_bagging_fit_and_oob_score(estimator, oob_score, X, y, n_samples, n_classes, data_seed):
+def _DecisionForestClassifier_bagging_fit_and_oob_score(estimator, oob_score, X, y, n_samples, n_outputs, n_classes, data_seed):
     """ Parallel processing helper function for DecisionForestClassifier's fit function.
     """
 
@@ -43,22 +45,43 @@ def _DecisionForestClassifier_bagging_fit_and_oob_score(estimator, oob_score, X,
     # drawing random samples with replacement
     random_state = RandomState(data_seed)
     idx = random_state.randint(0, n_samples, size=n_samples)  # includes 0, excludes n_samples
-    # make sure training data includes all classes
-    while np.unique(y[idx]).shape[0] < n_classes:
+    # make sure training data includes all classes across all outputs
+    cnt = 0
+    while True:
+        # check
+        all = True
+        for o in range(n_outputs):
+            if np.unique(y[idx, o]).shape[0] < n_classes[o]:
+                all = False
+                break
+        if all: break
+        # redraw samples
         idx = random_state.randint(0, n_samples, size=n_samples)
+        # unable to randomize training data while including all classes
+        cnt += 1
+        if cnt > 10000:
+            raise ValueError("Unable to randomize training data including all classes for bagging.")
+
     estimator.fit(X[idx, :], y[idx])
 
     # Compute Out-Of-Bag estimates
-    # as average error for all samples when not included in bootstrap
-    p = np.zeros((n_samples, n_classes))
+    # as average error for all samples across all outputs when not included in bootstrap
+
+    # We use n_classes_max to create a nice 3D array to hold the predicted values x samples x classes
+    # as the number of classes can be different for different outputs
+    n_classes_max = int(max(n_classes))
+    p = np.zeros((n_samples, n_outputs, n_classes_max))
+
     if oob_score:
         unsampled_idx = np.bincount(idx, minlength=n_samples) == 0
-        p[unsampled_idx, :] = estimator.predict_proba(X[unsampled_idx, :])
+        if sum(unsampled_idx) > 0:
+            proba = estimator.predict_proba(X[unsampled_idx, :])
+            p[unsampled_idx, :] = np.reshape(proba, (-1, n_outputs, n_classes_max))
 
     return estimator, p
 
 
-class DecisionForestClassifier(BaseEstimator, ClassifierMixin):
+class DecisionForestClassifier(BaseEstimator, ClassifierMixin, MultiOutputMixin):
     """ A decision forest classifier.
 
     Parameters
@@ -146,11 +169,14 @@ class DecisionForestClassifier(BaseEstimator, ClassifierMixin):
 
     Attributes
     ----------
-    classes_ : array, shape = [n_classes]
-        The classes labels.
+    n_outputs_ : int
+        The number of outputs (multi-output).
 
-    n_classes_ : int
-        The number of classes.
+    classes_ : list of variable size arrays, shape = [n_classes for each output]
+        The classes labels for each output.
+
+    n_classes_ : list of int
+        The number of classes for each output.
 
     n_features_ : int
         The number of features.
@@ -186,7 +212,6 @@ class DecisionForestClassifier(BaseEstimator, ClassifierMixin):
                  n_jobs=None):
         """ Create a new decision forest classifier and initialize it with hyperparameters.
         """
-
         # Hyperparameters
         self.n_estimators = n_estimators
         self.bootstrap = bootstrap
@@ -211,7 +236,7 @@ class DecisionForestClassifier(BaseEstimator, ClassifierMixin):
         X : array, shape = [n_samples, n_features]
             The training input samples.
 
-        y : array, shape = [n_samples]
+        y : array, shape = [n_samples] or [n_samples, n_outputs]
             The target class labels corresponding to the training input samples.
 
         Returns
@@ -226,16 +251,30 @@ class DecisionForestClassifier(BaseEstimator, ClassifierMixin):
         # Check X, y
 
         if self.missing_values == 'NMAR':
-            X, y = check_X_y(X, y, dtype=np.float64, order="C", force_all_finite='allow-nan')
+            X, y = check_X_y(X, y, dtype=np.float64, order="C", force_all_finite='allow-nan', multi_output=True)
         else:
-            X, y = check_X_y(X, y, dtype=np.float64, order="C")
+            X, y = check_X_y(X, y, dtype=np.float64, order="C", multi_output=True)
 
-        # Determine attributes from training data
-
-        self.classes_ = unique_labels(y)  # Keep to raise required ValueError tested by 'check_estimator()'
-        self.classes_, y = np.unique(y, return_inverse=True)  # Encode y from classes to integers
-        self.n_classes_ = self.classes_.shape[0]
         n_samples, self.n_features_ = X.shape
+
+        # Handle multi-outputs
+        if y.ndim == 1:  # 2D format for single-output and multi-output
+            y = np.reshape(y, (-1, 1))
+        self.n_outputs_ = y.shape[1]
+
+        if y.shape[0] != n_samples:
+            raise ValueError("Mismatch: n_outputs, n_features and n_samples.")
+
+        self.classes_ = []  # lists with an element for each output
+        self.n_classes_ = np.zeros(self.n_outputs_, dtype=np.uint)
+        y_int = np.zeros(y.shape, dtype=np.int)  # make sure y is integer
+        for o in range(self.n_outputs_):  # process each output independently
+            o_classes = unique_labels(y[:, o])  # Keep to raise required ValueError tested by 'check_estimator()'
+            o_classes, y_int[:, o] = np.unique(y[:, o], return_inverse=True)  # Encode y from classes to integers
+            self.classes_.append(o_classes)
+            self.n_classes_[o] = o_classes.shape[0]
+        if self.n_outputs_ == 1:
+            self.classes_ = reduce(operator.concat, self.classes_)
 
         # Check hyperparameters (here, not in __init__)
 
@@ -305,36 +344,22 @@ class DecisionForestClassifier(BaseEstimator, ClassifierMixin):
 
             # embarrassing parallelism
             ps = []
-            n_classes = np.unique(y).shape[0]
-
-            # for estimator, data_seed in zip(estimators, data_seeds):
-            #     # Build a decision tree from the bootstrapped training data
-            #     # drawing random samples with replacement
-            #     random_state = np.random.RandomState(data_seed)
-            #     idx = random_state.randint(0, n_samples, size=n_samples)  # includes 0, excludes n_samples
-            #     # make sure training data includes all classes
-            #     while np.unique(y[idx]).shape[0] < n_classes:
-            #         idx = random_state.randint(0, n_samples, size=n_samples)
-            #     estimator.fit(X[idx, :], y[idx])
-            #     # Compute Out-Of-Bag estimates
-            #     # as average error for all samples when not included in bootstrap
-            #     p = np.zeros((n_samples, self.n_classes_))
-            #     if self.oob_score:
-            #         unsampled_idx = np.bincount(idx, minlength=n_samples) == 0
-            #         p[unsampled_idx, :] = estimator.predict_proba(X[unsampled_idx, :])
-            #     ps.append(p)
 
             out = Parallel(n_jobs=self.n_jobs) \
                 (delayed(_DecisionForestClassifier_bagging_fit_and_oob_score)  # helper function
-                 (estimator, self.oob_score, X, y, n_samples, n_classes, data_seed)
+                 (estimator, self.oob_score, X, y, n_samples, self.n_outputs_, self.n_classes_, data_seed)
                  for estimator, data_seed in zip(estimators, data_seeds))
             estimators, ps = zip(*out)
 
+            # Predict classes probabilities for all outputs for the decision forest
+            # as average of the class probabilities from all decision trees
+            # >>> reduce
+
             if self.oob_score:
                 ps = np.array(ps)
-                class_probabilities = np.sum(ps, axis=0)  # no normalization needed when using argmax( )
-                predictions = np.argmax(class_probabilities, axis=1)
-                valid_idx = np.sum(class_probabilities, axis=1) > 0.0  # samples that have an oob score
+                class_probabilities = np.sum(ps, axis=0)  # no normalization needed when using argmax( ) later on
+                predictions = np.argmax(class_probabilities, axis=2)
+                valid_idx = np.sum(np.sum(class_probabilities, axis=2), axis=1) > 0.0  # samples that have an oob score
                 oob_n_samples = np.sum(valid_idx)
                 if oob_n_samples == n_samples:
                     self.oob_score_ = np.mean(y[valid_idx] == predictions[valid_idx])
@@ -360,19 +385,46 @@ class DecisionForestClassifier(BaseEstimator, ClassifierMixin):
 
         Returns
         -------
-        y : array, shape = [n_samples]
+        y : array, shape = [n_samples] or [n_samples, n_outputs]
             The predicted classes for the test input samples.
         """
+
+        # Check that fit has been called
+        check_is_fitted(self, ['estimators_'])
+
+        # Check X
+        if self.missing_values == 'NMAR':
+            X = check_array(X, dtype=np.float64, order="C", force_all_finite='allow-nan')
+        else:
+            X = check_array(X, dtype=np.float64, order="C")
+
+        n_samples = X.shape[0]
+        n_classes_max = max(self.n_classes_)
 
         # Soft voting using
         # predicted class probabilities
         class_probablities = self.predict_proba(X)
+        # Handle single-output and multi-outputs formatting
+        # 2D format for single-output and multi-output
+        class_probablities = np.reshape(class_probablities, (-1, self.n_outputs_, n_classes_max))
 
-        # Determine class based on highest classes probabilities
-        predictions = np.argmax(class_probablities, axis=1)
+        # Handle multi-outputs formatting
+        y = []
+        if self.n_outputs_ == 1:
+            # Determine class based on highest classes probabilities
+            predictions = np.argmax(class_probablities[:, 0], axis=1)
+            # Decode y back from integers to classes
+            y = self.classes_.take(predictions, axis=0)
+        else:
+            for o in range(self.n_outputs_):
+                # Determine class based on highest classes probabilities
+                predictions = np.argmax(class_probablities[:, o], axis=1)
+                # Decode y back from integers to classes
+                y.append(self.classes_[o].take(predictions, axis=0))
+            y = np.array(y)
+            y = np.reshape(y.transpose(), (-1, self.n_outputs_)) # 2D format for multi-output
 
-        # Decode y back from integers to classes
-        return self.classes_.take(predictions, axis=0)
+        return y
 
     def predict_proba(self, X):
         """ Predict classes probabilities for the test data.
@@ -397,7 +449,7 @@ class DecisionForestClassifier(BaseEstimator, ClassifierMixin):
         else:
             X = check_array(X, dtype=np.float64, order="C")
 
-        n_samples, n_features = X.shape
+        n_features = X.shape[1]
         if self.n_features_ != n_features:
             raise ValueError("X: number of features %s != number of features of the model %s, "
                              "must match."
@@ -417,7 +469,57 @@ class DecisionForestClassifier(BaseEstimator, ClassifierMixin):
 
         # Predict classes probabilities for the decision forest
         # as average of the class probabilities from all decision trees
-        return sum(ps) / len(self.estimators_)  # reduce
+
+        proba = sum(ps) / len(self.estimators_)  # reduce
+
+        # Handle single-output and multi-outputs formatting
+        n_classes_max = max(self.n_classes_)
+        if self.n_outputs_ == 1:
+            proba = np.reshape(proba, (-1, self.n_classes_[0]))
+        else:
+            proba = np.reshape(proba, (-1, self.n_outputs_, n_classes_max))
+
+        return proba
+
+
+    def score(self, X, y):
+        """Returns the mean accuracy on the given test data and labels.
+
+        sklearn has no metrics support for "multiclass-multioutput" format,
+        therefore we implement our own score() here
+
+        In multi-label classification, this is the subset accuracy
+        which is a harsh metric since you require for each sample that
+        each label set be correctly predicted.
+
+        Parameters
+        ----------
+        X : array-like, shape = (n_samples, n_features)
+            Test samples.
+
+        y : array-like, shape = (n_samples) or (n_samples, n_outputs)
+            True labels for X.
+
+        Returns
+        -------
+        score : float
+            Mean accuracy of self.predict(X) wrt. y.
+
+        """
+
+        y_pred = self.predict(X)
+
+        # Handle single-output and multi-outputs formatting
+        y = y.ravel()
+        y_pred = y_pred.ravel()
+
+        # No metrics support "multiclass-multioutput" format
+        # y_type, y, y_pred = _check_targets(y, y_pred)
+        check_consistent_length(y, y_pred)
+
+        score = np.average(y == y_pred)
+
+        return score
 
     @property
     def feature_importances_(self):

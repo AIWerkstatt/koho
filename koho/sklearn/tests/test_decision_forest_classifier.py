@@ -8,6 +8,7 @@ import pytest
 
 import numpy as np
 import pickle
+import graphviz
 
 from sklearn.datasets import load_iris
 
@@ -259,6 +260,218 @@ def test_simple_example():
         assert i1 > i2 - precision and i1 < i2 + precision
     # Testing
     score = clf2.score(X, y)
+    assert score > 1.0 - precision and score < 1.0 + precision
+
+# simple multi-output example
+# ===========================
+
+# multi-output fed with single-output
+# -----------------------------------
+
+def test_simple_multi_output_example_with_single_output():
+    classes = [['0', '1', '2', '3', '4', '5', '6', '7']]
+    features = ['2^2', '2^1', '2^0']
+
+    X_mo = np.array([[0, 0, 0],
+                     [0, 0, 1],
+                     [0, 1, 0],
+                     [0, 1, 1],
+                     [1, 0, 0],
+                     [1, 0, 1],
+                     [1, 1, 0],
+                     [1, 1, 1]]).astype(np.double)
+    y_mo = np.array([[0],
+                     [1],
+                     [2],
+                     [3],
+                     [4],
+                     [5],
+                     [6],
+                     [7]]).astype(np.long)
+
+    clf = DecisionForestClassifier(
+        n_estimators=10,
+        bootstrap=False,
+        oob_score=False,
+        class_balance='balanced',
+        max_depth=3,
+        max_features=1,
+        max_thresholds=1,
+        missing_values=None,
+        random_state=0)
+    # Training
+    clf.fit(X_mo, y_mo)
+    # Feature Importances
+    feature_importances = clf.feature_importances_
+    feature_importances_target = [0.32857143, 0.32857143, 0.34285714]
+    for i1, i2 in zip(feature_importances, feature_importances_target):
+        assert i1 > i2 - precision and i1 < i2 + precision
+    # Visualize Tree
+    dot_data = clf.estimators_[0].export_graphviz(
+        feature_names=features,
+        class_names=classes,
+        rotate=True)
+    #filename = "simple_example_multi_output_with_single_output_dfc_dtc_0"
+    #graph = graphviz.Source(dot_data)
+    #graph.render(filename, format='pdf')
+    dot_data_target = \
+        r'digraph Tree {' '\n' \
+        r'node [shape=box, style="rounded, filled", color="black", fontname=helvetica, fontsize=14] ;' '\n' \
+        r'edge [fontname=helvetica, fontsize=12] ;' '\n' \
+        r'rankdir=LR ;' '\n' \
+        r'0 [label="2^2 <= 0.874\np(class) = [0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12]\nclass, n = 8", fillcolor="#FF000000"] ;' '\n' \
+        r'0 -> 1 [penwidth=5.000000, headlabel="True", labeldistance=2.5, labelangle=-45] ;' '\n' \
+        r'0 -> 8 [penwidth=5.000000] ;' '\n' \
+        r'1 [label="2^0 <= 0.753\n[0.25, 0.25, 0.25, 0.25, 0, 0, 0, 0]", fillcolor="#FF000024"] ;' '\n' \
+        r'1 -> 2 [penwidth=2.500000] ;' '\n' \
+        r'1 -> 5 [penwidth=2.500000] ;' '\n' \
+        r'2 [label="2^1 <= 0.368\n[0.5, 0, 0.5, 0, 0, 0, 0, 0]", fillcolor="#FF00006D"] ;' '\n' \
+        r'2 -> 3 [penwidth=1.250000] ;' '\n' \
+        r'2 -> 4 [penwidth=1.250000] ;' '\n' \
+        r'3 [label="[1, 0, 0, 0, 0, 0, 0, 0]\n0", fillcolor="#FF0000FF"] ;' '\n' \
+        r'4 [label="[0, 0, 1, 0, 0, 0, 0, 0]\n2", fillcolor="#0000FFFF"] ;' '\n' \
+        r'5 [label="2^1 <= 0.31\n[0, 0.5, 0, 0.5, 0, 0, 0, 0]", fillcolor="#00FF006D"] ;' '\n' \
+        r'5 -> 6 [penwidth=1.250000] ;' '\n' \
+        r'5 -> 7 [penwidth=1.250000] ;' '\n' \
+        r'6 [label="[0, 1, 0, 0, 0, 0, 0, 0]\n1", fillcolor="#00FF00FF"] ;' '\n' \
+        r'7 [label="[0, 0, 0, 1, 0, 0, 0, 0]\n3", fillcolor="#FFFF00FF"] ;' '\n' \
+        r'8 [label="2^1 <= 0.247\n[0, 0, 0, 0, 0.25, 0.25, 0.25, 0.25]", fillcolor="#00FFFF24"] ;' '\n' \
+        r'8 -> 9 [penwidth=2.500000] ;' '\n' \
+        r'8 -> 12 [penwidth=2.500000] ;' '\n' \
+        r'9 [label="2^0 <= 0.316\n[0, 0, 0, 0, 0.5, 0.5, 0, 0]", fillcolor="#00FFFF6D"] ;' '\n' \
+        r'9 -> 10 [penwidth=1.250000] ;' '\n' \
+        r'9 -> 11 [penwidth=1.250000] ;' '\n' \
+        r'10 [label="[0, 0, 0, 0, 1, 0, 0, 0]\n4", fillcolor="#00FFFFFF"] ;' '\n' \
+        r'11 [label="[0, 0, 0, 0, 0, 1, 0, 0]\n5", fillcolor="#FF00FFFF"] ;' '\n' \
+        r'12 [label="2^0 <= 0.516\n[0, 0, 0, 0, 0, 0, 0.5, 0.5]", fillcolor="#FF80006D"] ;' '\n' \
+        r'12 -> 13 [penwidth=1.250000] ;' '\n' \
+        r'12 -> 14 [penwidth=1.250000] ;' '\n' \
+        r'13 [label="[0, 0, 0, 0, 0, 0, 1, 0]\n6", fillcolor="#FF8000FF"] ;' '\n' \
+        r'14 [label="[0, 0, 0, 0, 0, 0, 0, 1]\n7", fillcolor="#00FF80FF"] ;' '\n' \
+        r'}'
+    assert dot_data == dot_data_target
+    # Export textual format
+    t = clf.estimators_[0].export_text()
+    t_target = r'0 X[0]<=0.874 [1, 1, 1, 1, 1, 1, 1, 1]; 0->1; 0->8; 1 X[2]<=0.753 [1, 1, 1, 1, 0, 0, 0, 0]; 1->2; 1->5; 2 X[1]<=0.368 [1, 0, 1, 0, 0, 0, 0, 0]; 2->3; 2->4; 3 [1, 0, 0, 0, 0, 0, 0, 0]; 4 [0, 0, 1, 0, 0, 0, 0, 0]; 5 X[1]<=0.31 [0, 1, 0, 1, 0, 0, 0, 0]; 5->6; 5->7; 6 [0, 1, 0, 0, 0, 0, 0, 0]; 7 [0, 0, 0, 1, 0, 0, 0, 0]; 8 X[1]<=0.247 [0, 0, 0, 0, 1, 1, 1, 1]; 8->9; 8->12; 9 X[2]<=0.316 [0, 0, 0, 0, 1, 1, 0, 0]; 9->10; 9->11; 10 [0, 0, 0, 0, 1, 0, 0, 0]; 11 [0, 0, 0, 0, 0, 1, 0, 0]; 12 X[2]<=0.516 [0, 0, 0, 0, 0, 0, 1, 1]; 12->13; 12->14; 13 [0, 0, 0, 0, 0, 0, 1, 0]; 14 [0, 0, 0, 0, 0, 0, 0, 1]; '
+    assert t == t_target
+    # Persistence
+    with open("simple_example_multi_output_with_single_output_dtc.pkl", "wb") as f:
+        pickle.dump(clf, f)
+    with open("simple_example_multi_output_with_single_output_dtc.pkl", "rb") as f:
+        clf2 = pickle.load(f)
+    assert clf2.estimators_[0].export_text() == clf.estimators_[0].export_text()
+    # Classification
+    c = clf2.predict(X_mo)
+    for i1, i2 in zip(c, y_mo):
+        assert i1 > i2 - precision and i1 < i2 + precision
+    # Testing
+    score = clf2.score(X_mo, y_mo)
+    assert score > 1.0 - precision and score < 1.0 + precision
+
+# multi-output
+# ------------
+
+def test_simple_multi_output_example():
+    classes = [['0', '1', '2', '3', '4', '5', '6', '7'],
+               ['0', '4'],
+               ['0', '2'],
+               ['0', '1']]
+    features = ['2^2', '2^1', '2^0']
+
+    X_mo = np.array([[0, 0, 0],
+                     [0, 0, 1],
+                     [0, 1, 0],
+                     [0, 1, 1],
+                     [1, 0, 0],
+                     [1, 0, 1],
+                     [1, 1, 0],
+                     [1, 1, 1]]).astype(np.double)
+    y_mo = np.array([[0, 0, 0, 0],
+                     [1, 0, 0, 1],
+                     [2, 0, 1, 0],
+                     [3, 0, 1, 1],
+                     [4, 1, 0, 0],
+                     [5, 1, 0, 1],
+                     [6, 1, 1, 0],
+                     [7, 1, 1, 1]]).astype(np.long)
+
+    clf = DecisionForestClassifier(
+        n_estimators=10,
+        bootstrap=False,
+        oob_score=False,
+        class_balance='balanced',
+        max_depth=3,
+        max_features=1,
+        max_thresholds=1,
+        missing_values=None,
+        random_state=0)
+    # Training
+    clf.fit(X_mo, y_mo)
+    # Feature Importances
+    feature_importances = clf.feature_importances_
+    feature_importances_target = [0.33157895, 0.33157895, 0.33684211]
+    for i1, i2 in zip(feature_importances, feature_importances_target):
+        assert i1 > i2 - precision and i1 < i2 + precision
+    # Visualize Tree
+    dot_data = clf.estimators_[0].export_graphviz(
+        feature_names=features,
+        class_names=classes,
+        rotate=True)
+    #filename = "simple_example_multi_output_dfc_dtc_0"
+    #graph = graphviz.Source(dot_data)
+    #graph.render(filename, format='pdf')
+    dot_data_target = \
+        r'digraph Tree {' '\n' \
+        r'node [shape=box, style="rounded, filled", color="black", fontname=helvetica, fontsize=14] ;' '\n' \
+        r'edge [fontname=helvetica, fontsize=12] ;' '\n' \
+        r'rankdir=LR ;' '\n' \
+        r'0 [label="2^2 <= 0.874\np(class) = [0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12]\n[0.5, 0.5]\n[0.5, 0.5]\n[0.5, 0.5]\nclass, n = 8", fillcolor="#FF000000"] ;' '\n' \
+        r'0 -> 1 [penwidth=5.000000, headlabel="True", labeldistance=2.5, labelangle=-45] ;' '\n' \
+        r'0 -> 8 [penwidth=5.000000] ;' '\n' \
+        r'1 [label="2^0 <= 0.753\n[0.25, 0.25, 0.25, 0.25, 0, 0, 0, 0]\n[1, 0]\n[0.5, 0.5]\n[0.5, 0.5]\n", fillcolor="#FF000043"] ;' '\n' \
+        r'1 -> 2 [penwidth=2.500000] ;' '\n' \
+        r'1 -> 5 [penwidth=2.500000] ;' '\n' \
+        r'2 [label="2^1 <= 0.368\n[0.5, 0, 0.5, 0, 0, 0, 0, 0]\n[1, 0]\n[0.5, 0.5]\n[1, 0]\n", fillcolor="#FF000093"] ;' '\n' \
+        r'2 -> 3 [penwidth=1.250000] ;' '\n' \
+        r'2 -> 4 [penwidth=1.250000] ;' '\n' \
+        r'3 [label="[1, 0, 0, 0, 0, 0, 0, 0]\n[1, 0]\n[1, 0]\n[1, 0]\n0\n0\n0\n0\n", fillcolor="#FF0000FF"] ;' '\n' \
+        r'4 [label="[0, 0, 1, 0, 0, 0, 0, 0]\n[1, 0]\n[0, 1]\n[1, 0]\n2\n0\n2\n0\n", fillcolor="#00FFFFFF"] ;' '\n' \
+        r'5 [label="2^1 <= 0.31\n[0, 0.5, 0, 0.5, 0, 0, 0, 0]\n[1, 0]\n[0.5, 0.5]\n[0, 1]\n", fillcolor="#FFFF0093"] ;' '\n' \
+        r'5 -> 6 [penwidth=1.250000] ;' '\n' \
+        r'5 -> 7 [penwidth=1.250000] ;' '\n' \
+        r'6 [label="[0, 1, 0, 0, 0, 0, 0, 0]\n[1, 0]\n[1, 0]\n[0, 1]\n1\n0\n0\n1\n", fillcolor="#FFFF00FF"] ;' '\n' \
+        r'7 [label="[0, 0, 0, 1, 0, 0, 0, 0]\n[1, 0]\n[0, 1]\n[0, 1]\n3\n0\n2\n1\n", fillcolor="#00FF80FF"] ;' '\n' \
+        r'8 [label="2^1 <= 0.247\n[0, 0, 0, 0, 0.25, 0.25, 0.25, 0.25]\n[0, 1]\n[0.5, 0.5]\n[0.5, 0.5]\n", fillcolor="#FF400043"] ;' '\n' \
+        r'8 -> 9 [penwidth=2.500000] ;' '\n' \
+        r'8 -> 12 [penwidth=2.500000] ;' '\n' \
+        r'9 [label="2^0 <= 0.316\n[0, 0, 0, 0, 0.5, 0.5, 0, 0]\n[0, 1]\n[1, 0]\n[0.5, 0.5]\n", fillcolor="#FF400093"] ;' '\n' \
+        r'9 -> 10 [penwidth=1.250000] ;' '\n' \
+        r'9 -> 11 [penwidth=1.250000] ;' '\n' \
+        r'10 [label="[0, 0, 0, 0, 1, 0, 0, 0]\n[0, 1]\n[1, 0]\n[1, 0]\n4\n4\n0\n0\n", fillcolor="#FF4000FF"] ;' '\n' \
+        r'11 [label="[0, 0, 0, 0, 0, 1, 0, 0]\n[0, 1]\n[1, 0]\n[0, 1]\n5\n4\n0\n1\n", fillcolor="#BFFF00FF"] ;' '\n' \
+        r'12 [label="2^0 <= 0.516\n[0, 0, 0, 0, 0, 0, 0.5, 0.5]\n[0, 1]\n[0, 1]\n[0.5, 0.5]\n", fillcolor="#00BFFF93"] ;' '\n' \
+        r'12 -> 13 [penwidth=1.250000] ;' '\n' \
+        r'12 -> 14 [penwidth=1.250000] ;' '\n' \
+        r'13 [label="[0, 0, 0, 0, 0, 0, 1, 0]\n[0, 1]\n[0, 1]\n[1, 0]\n6\n4\n2\n0\n", fillcolor="#00BFFFFF"] ;' '\n' \
+        r'14 [label="[0, 0, 0, 0, 0, 0, 0, 1]\n[0, 1]\n[0, 1]\n[0, 1]\n7\n4\n2\n1\n", fillcolor="#00FFC0FF"] ;' '\n' \
+        r'}'
+    assert dot_data == dot_data_target
+    # Export textual format
+    t = clf.estimators_[0].export_text()
+    t_target = r'0 X[0]<=0.874 [1, 1, 1, 1, 1, 1, 1, 1][4, 4][4, 4][4, 4]; 0->1; 0->8; 1 X[2]<=0.753 [1, 1, 1, 1, 0, 0, 0, 0][4, 0][2, 2][2, 2]; 1->2; 1->5; 2 X[1]<=0.368 [1, 0, 1, 0, 0, 0, 0, 0][2, 0][1, 1][2, 0]; 2->3; 2->4; 3 [1, 0, 0, 0, 0, 0, 0, 0][1, 0][1, 0][1, 0]; 4 [0, 0, 1, 0, 0, 0, 0, 0][1, 0][0, 1][1, 0]; 5 X[1]<=0.31 [0, 1, 0, 1, 0, 0, 0, 0][2, 0][1, 1][0, 2]; 5->6; 5->7; 6 [0, 1, 0, 0, 0, 0, 0, 0][1, 0][1, 0][0, 1]; 7 [0, 0, 0, 1, 0, 0, 0, 0][1, 0][0, 1][0, 1]; 8 X[1]<=0.247 [0, 0, 0, 0, 1, 1, 1, 1][0, 4][2, 2][2, 2]; 8->9; 8->12; 9 X[2]<=0.316 [0, 0, 0, 0, 1, 1, 0, 0][0, 2][2, 0][1, 1]; 9->10; 9->11; 10 [0, 0, 0, 0, 1, 0, 0, 0][0, 1][1, 0][1, 0]; 11 [0, 0, 0, 0, 0, 1, 0, 0][0, 1][1, 0][0, 1]; 12 X[2]<=0.516 [0, 0, 0, 0, 0, 0, 1, 1][0, 2][0, 2][1, 1]; 12->13; 12->14; 13 [0, 0, 0, 0, 0, 0, 1, 0][0, 1][0, 1][1, 0]; 14 [0, 0, 0, 0, 0, 0, 0, 1][0, 1][0, 1][0, 1]; '
+    assert t == t_target
+    # Persistence
+    with open("simple_example_multi_output_dtc.pkl", "wb") as f:
+        pickle.dump(clf, f)
+    with open("simple_example_multi_output_dtc.pkl", "rb") as f:
+        clf2 = pickle.load(f)
+    assert clf2.estimators_[0].export_text() == clf.estimators_[0].export_text()
+    # Classification
+    c = clf2.predict(X_mo)
+    for i1, i2 in zip(c.ravel(), y_mo.ravel()):
+        assert i1 > i2 - precision and i1 < i2 + precision
+    # Testing
+    score = clf2.score(X_mo, y_mo)
     assert score > 1.0 - precision and score < 1.0 + precision
 
 # DecisionForestClassifier.fit()
@@ -1276,7 +1489,6 @@ def test_y_0_train():
     clf.fit(X_train, y_train)
 
     data = clf.estimators_[0].export_text()
-    print(data)
     data_target = r'0 [3]; '
     assert data == data_target
 
@@ -1321,4 +1533,3 @@ def test_mismatch_nfeatures():
     with pytest.raises(ValueError) as excinfo:
         predict_proba = clf.predict_proba(X_test)
     assert 'number of features' in str(excinfo.value)
-

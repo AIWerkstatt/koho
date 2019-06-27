@@ -25,24 +25,36 @@ namespace koho {
 
     // Create and initialize a new decision forest classifier.
 
-    DecisionForestClassifier::DecisionForestClassifier(vector<string>  classes,
-                                                       ClassesIdx_t    n_classes,
-                                                       vector<string>  features,
-                                                       FeaturesIdx_t   n_features,
-                                                       unsigned long   n_estimators,
-                                                       bool            bootstrap,
-                                                       bool            oob_score,
-                                                       string const&   class_balance,
-                                                       TreeDepthIdx_t  max_depth,
-                                                       FeaturesIdx_t   max_features,
-                                                       unsigned long   max_thresholds,
-                                                       string const&   missing_values,
-                                                       long            random_state_seed) {
+    auto calculate_n_classes = [](const vector<vector<string>>& classes) {
+        vector<ClassesIdx_t> n_classes(classes.size(), 0);
+        for (OutputsIdx_t o=0; o<classes.size(); o++) {
+            n_classes[o] = classes[o].size();
+        }
+        return n_classes;
+    };
 
-        DecisionForestClassifier::classes = std::move(classes);
-        DecisionForestClassifier::n_classes = n_classes;
-        DecisionForestClassifier::features = std::move(features);
-        DecisionForestClassifier::n_features = n_features;
+    DecisionForestClassifier::DecisionForestClassifier(vector<vector<string>> const&    classes,
+                                                       vector<string> const&            features,
+                                                       unsigned long                    n_estimators,
+                                                       bool                             bootstrap,
+                                                       bool                             oob_score,
+                                                       string const&                    class_balance,
+                                                       TreeDepthIdx_t                   max_depth,
+                                                       FeaturesIdx_t                    max_features,
+                                                       unsigned long                    max_thresholds,
+                                                       string const&                    missing_values,
+                                                       long                             random_state_seed)
+
+            :   n_outputs(classes.size()),
+                classes(classes),
+                n_classes(calculate_n_classes(classes)),
+                features(features),
+                n_features(features.size()) {
+
+        // for convenience
+
+        DecisionForestClassifier::n_classes_max = *max_element(begin(DecisionForestClassifier::n_classes),
+                                                               end(DecisionForestClassifier::n_classes));
 
         // Check hyperparameters
 
@@ -103,9 +115,14 @@ namespace koho {
 
     // Build a decision forest classifier from the training data.
 
-    void DecisionForestClassifier::fit(Features_t*   X,
-                                       Classes_t*    y,
-                                       SamplesIdx_t  n_samples) {
+    void DecisionForestClassifier::fit(vector<Features_t>&   X,
+                                       vector<Classes_t>&    y) {
+
+        // number of samples
+        SamplesIdx_t    n_samples = y.size() / n_outputs;
+        if (n_samples != X.size() / n_features) {
+            throw runtime_error("Mismatch: n_outputs, n_features and n_samples.");
+        }
 
         // Create explicitly different seeds for the decision trees
         // to avoid building the same tree over and over again for the entire decision forest
@@ -117,13 +134,13 @@ namespace koho {
 
         // Instantiate decision trees
         for (unsigned long e = 0; e < n_estimators; ++e) {
-            dtc_.emplace_back(DecisionTreeClassifier(classes, n_classes,
-                                                     features, n_features,
+            dtc_.emplace_back(DecisionTreeClassifier(classes, features,
                                                      class_balance, max_depth,
                                                      max_features, max_thresholds,
                                                      missing_values,
                                                      algo_seeds[e]));
         }
+
         oob_score_ = 0.0;
 
         // Build decision trees from training data
@@ -131,10 +148,10 @@ namespace koho {
 
             // >>> mapping embarrassing parallelism
             for (unsigned long e = 0; e < n_estimators; ++e) {
-                dtc_[e].fit(&X[0], &y[0], n_samples); // decision trees
+                dtc_[e].fit(X, y); // decision trees
             }
 
-        } else { // Bagging & Out_Of-Bag estimate
+        } else { // Bagging & Out-Of-Bag estimate
 
             // Different seeds for algorithm and data (bagging)
             // to avoid building the same trees multiple times
@@ -146,7 +163,6 @@ namespace koho {
 
             // >>> mapping embarrassing parallelism
             vector<vector<double>> ps;
-            ClassesIdx_t n_classes = set<long>(&y[0], &y[0]+n_samples).size();
             for (unsigned long e = 0; e < n_estimators; ++e) {
 
                 // Build a decision tree from the bootstrapped training data
@@ -168,9 +184,29 @@ namespace koho {
                 }
                 unsigned long n_samples_train = n_samples;
 
-                // make sure training data includes all classes
+                // make sure training data includes all classes across all outputs
 
-                while (set<long>(&y_train[0], &y_train[0]+n_samples_train).size() < n_classes) {
+                unsigned long cnt = 0;
+                while (true) {
+
+                    // check
+
+                    bool  all = true;
+                    for (unsigned long o=0; o<n_outputs; ++o) {
+                        set<long> classesSet;
+                        for (unsigned long c = 0; c < n_classes[o]; ++c) { classesSet.insert(c); }
+                        for (unsigned long i = 0; i < n_samples_train; ++i) {
+                            classesSet.erase(y[i * n_outputs + o]);
+                            if (classesSet.empty()) continue;
+                        }
+                        if (!classesSet.empty()) {
+                            all = false;
+                            continue;
+                        }
+                    }
+                    if (all) break;
+
+                    // redraw samples
 
                     X_train.clear();
                     y_train.clear();
@@ -185,14 +221,21 @@ namespace koho {
                         }
                         y_train.emplace_back(y[idx[s]]);
                     }
+
+                    // unable to randomize training data while including all classes
+                    if (cnt++ > 10000) {
+                        throw runtime_error("Unable to randomize training data including all classes for bagging.");
+                    }
                 }
 
-                dtc_[e].fit(&X_train[0], &y_train[0], n_samples_train); // decision trees
+                dtc_[e].fit(X_train, y_train); // decision trees
 
                 // Compute Out-Of-Bag estimates
-                // as average error for all samples when not included in bootstrap
+                // as average error for all samples across all outputs when not included in bootstrap
 
-                vector<double> p(n_samples * n_classes, 0.0);
+                // We use n_classes_max to create a nice 3D array to hold the predicted values x samples x classes
+                // as the number of classes can be different for different outputs
+                vector<double> p(n_samples * n_outputs * n_classes_max, 0.0);
                 if (oob_score) {
                     vector<bool> unsampled_idx(n_samples, true);
                     for (SamplesIdx_t s = 0; s < n_samples; ++s) unsampled_idx[idx[s]] = false;
@@ -207,13 +250,15 @@ namespace koho {
                             n_samples_test++;
                         }
                     }
-                    vector<double> y_prob(n_samples_test * n_classes, 0.0);
-                    dtc_[e].predict_proba(&X_test[0], n_samples_test, &y_prob[0]);
+                    if (n_samples_test > 0) {
+                        vector<double> y_prob(n_samples_test * n_outputs * n_classes_max, 0.0);
+                        dtc_[e].predict_proba(&X_test[0], n_samples_test, &y_prob[0]);
 
-                    unsigned long i = 0;
-                    for (SamplesIdx_t s = 0; s < n_samples; ++s) { // samples
-                        if (unsampled_idx[s] == 0) { // unsampled
-                            p[s] = y_prob[i++];
+                        unsigned long i = 0;
+                        for (SamplesIdx_t s = 0; s < n_samples; ++s) { // samples
+                            if (unsampled_idx[s] == 0) { // unsampled
+                                p[s] = y_prob[i++];
+                            }
                         }
                     }
                 }
@@ -221,43 +266,63 @@ namespace koho {
             }
             if (oob_score) {
 
-                // Predict classes probabilities for the decision forest
+                // Predict classes probabilities for all outputs for the decision forest
                 // as average of the class probabilities from all decision trees
                 // >>> reduce
-                vector<double> class_probabilities(n_samples * n_classes, 0.0);
+                vector<double> class_probabilities(n_samples * n_outputs * n_classes_max, 0.0);
                 vector<bool> valid_idx(n_samples, false);
                 unsigned long n_valid_idx = 0;
+
                 for (SamplesIdx_t s = 0; s < n_samples; ++s) {
-                    for (ClassesIdx_t c = 0; c < n_classes; ++c) {
-                        double sum = 0.0;
-                        for (unsigned long e = 0; e < n_estimators; ++e) {
-                            sum += ps[e][s * n_classes + c];
-                        }
-                        class_probabilities[s * n_classes + c] = sum; // no normalization needed when using maxIndex( )
-                        // Identify samples with oob score
-                        if (sum > 0.0) {
-                            valid_idx[s] = true;
-                            n_valid_idx++;
+                    bool valid = false;
+                    for (OutputsIdx_t o=0; o< n_outputs; ++o) {
+                        for (ClassesIdx_t c = 0; c < n_classes[o]; ++c) {
+                            double sum = 0.0;
+                            for (unsigned long e = 0; e < n_estimators; ++e) {
+                                sum += ps[e][s * n_outputs * n_classes_max +
+                                             o * n_classes_max +
+                                             c];
+                            }
+                            // no normalization needed when using maxIndex( ) later on
+                            class_probabilities[s * n_outputs * n_classes_max +
+                                                o * n_classes_max +
+                                                c] = sum;
+                            // Identify samples with oob score
+                            if (sum > 0.0) { valid = true; }
                         }
                     }
+                    // Identify samples with oob score
+                    if (valid) {
+                        valid_idx[s] = true;
+                        n_valid_idx++;
+                    } else { break; }
                 }
 
                 if (n_valid_idx == n_samples) { // oob score for all samples
 
                     // Predict classes
-                    vector<long> predictions(n_samples, 0);
+                    vector<long> predictions(n_samples*n_outputs, 0);
                     for (SamplesIdx_t s = 0; s < n_samples; ++s) {
-                        predictions[s] = maxIndex(&class_probabilities[s * n_classes], n_classes);
+                        for (OutputsIdx_t o = 0; o < n_outputs; ++o) {
+                            predictions[s * n_outputs + o] =
+                                    maxIndex(&class_probabilities[s * n_outputs * n_classes_max +
+                                                                  o * n_classes_max],
+                                             n_classes[o]);
+                        }
                     }
 
                     // Score
                     unsigned long n_true = 0;
                     for (SamplesIdx_t s = 0; s < n_samples; ++s) {
-                        if (valid_idx[s]) {
-                            if (y[s] == predictions[s]) n_true++;
+                        for (OutputsIdx_t o = 0; o < n_outputs; ++o) {
+                            if (valid_idx[s]) {
+                                if (y[s * n_outputs + o] ==
+                                    predictions[s * n_outputs + o])
+                                    n_true++;
+                            }
                         }
                     }
-                    oob_score_ = static_cast<double>(n_true) / n_valid_idx;
+                    oob_score_ = static_cast<double>(n_true) / (n_valid_idx*n_outputs);
 
                 } else {
                     oob_score_ = 0.0;
@@ -268,8 +333,7 @@ namespace koho {
                 }
             }
         }
-
-    };
+    }
 
     // Predict classes probabilities for the test data.
 
@@ -277,30 +341,38 @@ namespace koho {
                                                  SamplesIdx_t  n_samples,
                                                  double*       y_prob) {
 
-        // Predict class probabilities for all decision trees
+        // Predict class probabilities for all outputs for all decision trees
+
+        // We use n_classes_max to create a nice 3D array to hold the predicted values x samples x classes
+        // as the number of classes can be different for different outputs
 
         // >>> mapping embarrassing parallelism
         vector<vector<double>> ps;
         for (unsigned long e = 0; e < n_estimators; ++e) {
-            vector<double> p(n_samples * n_classes, 0.0);
-            DecisionForestClassifier::dtc_[e].predict_proba(&X[0], n_samples, &p[0]);
+            vector<double> p(n_samples * n_outputs * n_classes_max, 0.0);
+            dtc_[e].predict_proba(&X[0], n_samples, &p[0]);
             ps.emplace_back(p);
         }
 
-        // Predict classes probabilities for the decision forest
+        // Predict classes probabilities for all outputs for the decision forest
         // as average of the class probabilities from all decision trees
 
         // >>> reduce
         for (SamplesIdx_t s = 0; s < n_samples; ++s) {
-            for (ClassesIdx_t c = 0; c < n_classes; ++c) {
-                double sum = 0.0;
-                for (unsigned long e = 0; e < n_estimators; ++e) {
-                    sum += ps[e][s*n_classes + c];
+            for (OutputsIdx_t o=0; o< n_outputs; ++o) {
+                for (ClassesIdx_t c = 0; c < n_classes[o]; ++c) {
+                    double sum = 0.0;
+                    for (unsigned long e = 0; e < n_estimators; ++e) {
+                        sum += ps[e][s * n_outputs * n_classes_max +
+                                     o * n_classes_max +
+                                     c];
+                    }
+                    y_prob[s * n_outputs * n_classes_max +
+                           o * n_classes_max +
+                           c] = sum / n_estimators;
                 }
-                y_prob[s*n_classes + c] = sum / n_estimators;
             }
         }
-
     }
 
     // Predict classes for the test data.
@@ -309,13 +381,20 @@ namespace koho {
                                            SamplesIdx_t  n_samples,
                                            Classes_t*    y) {
 
-        vector<double>  y_prob(n_samples*n_classes, 0.0);
+        // We use n_classes_max to create a nice 3D array to hold the predicted values x samples x classes
+        // as the number of classes can be different for different outputs
+
+        vector<double>  y_prob(n_samples * n_outputs * n_classes_max, 0.0);
         predict_proba(X, n_samples, &y_prob[0]);
 
         for (SamplesIdx_t s=0; s<n_samples; ++s) {
-            y[s] = maxIndex(&y_prob[s*n_classes], n_classes);
+            for (OutputsIdx_t o=0; o<n_outputs; ++o) {
+                y[s * n_outputs + o] =
+                        maxIndex(&y_prob[s * n_outputs * n_classes_max +
+                                         o * n_classes_max],
+                                 n_classes[o]);
+            }
         }
-
     }
 
     // Calculate score for the test data.
@@ -324,14 +403,18 @@ namespace koho {
                                            Classes_t*    y,
                                            SamplesIdx_t  n_samples) {
 
-        std::vector<long>    y_predict(n_samples, 0);
-        DecisionForestClassifier::predict(X, n_samples, &y_predict[0]);
+        vector<long>    y_predict(n_samples*n_outputs, 0);
+        predict(X, n_samples, &y_predict[0]);
 
         unsigned long n_true = 0;
-        for (unsigned long i = 0; i < n_samples; ++i) {
-            if (y_predict[i] == y[i]) n_true++;
+        for (SamplesIdx_t i = 0; i < n_samples; ++i) {
+            for (OutputsIdx_t o = 0; o < n_outputs; ++o) {
+                if (y_predict[i*n_outputs + o] ==
+                    y[i*n_outputs + o])
+                    n_true++;
+            }
         }
-        return static_cast<double>(n_true) / n_samples;
+        return static_cast<double>(n_true) / (n_samples*n_outputs);
 
     }
 
@@ -389,12 +472,19 @@ namespace koho {
 
     void  DecisionForestClassifier::serialize(std::ofstream& fout) {
 
+        // Number of Outputs
+        fout.write((const char*)(&n_outputs), sizeof(n_outputs));
+
         // Classes
-        fout.write((const char*)(&n_classes), sizeof(n_classes));
-        for (unsigned long c=0; c<n_classes; ++c) {
-            unsigned long  size = classes[c].size();
-            fout.write((const char*)&size, sizeof(size));
-            fout.write((const char*)&classes[c][0], size);
+        for (OutputsIdx_t o=0; o<n_outputs; ++o) {
+            fout.write((const char *) (&n_classes[o]), sizeof(n_classes[o]));
+        }
+        for (OutputsIdx_t o=0; o<n_outputs; ++o) {
+            for (unsigned long c=0; c<n_classes[o]; ++c) {
+                unsigned long size = classes[o][c].size();
+                fout.write((const char *) &size, sizeof(size));
+                fout.write((const char *) &classes[o][c][0], size);
+            }
         }
 
         // Features
@@ -437,7 +527,7 @@ namespace koho {
         ofstream  fout(fn, ios_base::binary);
         if (fout.is_open()) {
 
-            const int  version = 1; // file version number
+            const int  version = 2; // file version number
             fout.write((const char*)&version, sizeof(version));
 
             // Serialize Decision Forest Classifier
@@ -461,17 +551,29 @@ namespace koho {
 
     DecisionForestClassifier  DecisionForestClassifier::deserialize(std::ifstream& fin) {
 
+        // Number of Outputs
+        OutputsIdx_t                n_outputs;
+        fin.read((char*)(&n_outputs), sizeof(n_outputs));
+
         // Classes
-        ClassesIdx_t    n_classes;
-        vector<string>  classes;
-        fin.read((char*)(&n_classes), sizeof(n_classes));
-        for (unsigned long c=0; c<n_classes; ++c) {
-            string str;
-            unsigned long  size;
-            fin.read((char*)(&size), sizeof(size));
-            str.resize(size);
-            fin.read((char*)(&str[0]), size);
-            classes.emplace_back(str);
+        vector<ClassesIdx_t>        n_classes;
+        for (OutputsIdx_t o=0; o<n_outputs; ++o) {
+            ClassesIdx_t o_n_classes;
+            fin.read((char *) (&o_n_classes), sizeof(o_n_classes));
+            n_classes.emplace_back(o_n_classes);
+        }
+        vector<vector<string>>      classes;
+        for (OutputsIdx_t o=0; o<n_outputs; ++o) {
+            vector<string>          o_classes;
+            for (unsigned long c=0; c<n_classes[o]; ++c) {
+                string str;
+                unsigned long  size;
+                fin.read((char*)(&size), sizeof(size));
+                str.resize(size);
+                fin.read((char*)(&str[0]), size);
+                o_classes.emplace_back(str);
+            }
+            classes.emplace_back(o_classes);
         }
 
         // Features
@@ -513,8 +615,7 @@ namespace koho {
         // Random Number Generator
         long    random_state_seed = 0;
 
-        DecisionForestClassifier  dfc(classes, n_classes,
-                                      features, n_features,
+        DecisionForestClassifier  dfc(classes, features,
                                       n_estimators, bootstrap, oob_score,
                                       class_balance, max_depth,
                                       max_features, max_thresholds,
@@ -544,10 +645,10 @@ namespace koho {
             int  version;
             fin.read((char*)(&version), sizeof(version));
 
-            if (version == 1) { // file version number
+            if (version == 2) { // file version number
 
                 // Deserialize Decision Forest Classifier
-                DecisionForestClassifier  dfc = DecisionForestClassifier::deserialize(fin);
+                DecisionForestClassifier  dfc = deserialize(fin);
 
                 fin.close();
 

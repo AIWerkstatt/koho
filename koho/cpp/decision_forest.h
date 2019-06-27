@@ -25,37 +25,37 @@ namespace koho {
     class DecisionForestClassifier {
 
     protected:
-        std::vector<std::string>  classes;
-        ClassesIdx_t              n_classes;
-        std::vector<std::string>  features;
-        FeaturesIdx_t             n_features;
+        OutputsIdx_t                            n_outputs;
+        std::vector<std::vector<std::string>>   classes;
+        std::vector<ClassesIdx_t>               n_classes;
+        ClassesIdx_t                            n_classes_max; // just for convenience
+        std::vector<std::string>                features;
+        FeaturesIdx_t                           n_features;
 
         // Hyperparameters
-        unsigned long             n_estimators;
-        bool                      bootstrap;
-        bool                      oob_score;
-        std::string               class_balance;
-        TreeDepthIdx_t            max_depth;
-        FeaturesIdx_t             max_features;
-        unsigned long             max_thresholds;
-        std::string               missing_values;
+        unsigned long                           n_estimators;
+        bool                                    bootstrap;
+        bool                                    oob_score;
+        std::string                             class_balance;
+        TreeDepthIdx_t                          max_depth;
+        FeaturesIdx_t                           max_features;
+        unsigned long                           max_thresholds;
+        std::string                             missing_values;
 
         // Random Number Generator
-        RandomState               random_state;
+        RandomState                             random_state;
 
         // Model
-        std::vector<DecisionTreeClassifier> dtc_; // underlying sub-estimators
+        std::vector<DecisionTreeClassifier>     dtc_; // underlying sub-estimators
 
         // Performance Characteristics
-        double                    oob_score_; // Out_Of-Bag estimate
+        double                                  oob_score_; // Out_Of-Bag estimate
 
     public:
         /// Create and initialize a new decision forest classifier.
         /**
-        @param[in]  classes            Class labels.
-        @param[in]  n_classes          Number of classes = number of class labels.
+        @param[in]  classes            Class labels for each output.
         @param[in]  features           Feature names.
-        @param[in]  n_features         Number of features = number of feature names.
         @param[in]  n_estimators       Number of decision trees in the forest. <br>
         If 1, then the decision forest classifier is a decision tree classifier. <br>
         integer (default=10)
@@ -112,56 +112,57 @@ namespace koho {
         "Extreme Randomized Trees (ET)": max_features=n_features, max_thresholds=1. <br>
         "Totally Randomized Trees": max_features=1, max_thresholds=1, very similar to "Perfect Random Trees (PERT)".
         */
-        DecisionForestClassifier(std::vector<std::string>   classes,
-                                 ClassesIdx_t               n_classes,
-                                 std::vector<std::string>   features,
-                                 FeaturesIdx_t              n_features,
-                                 unsigned long              n_estimators = 100,
-                                 bool                       bootstrap = false,
-                                 bool                       oob_score = false,
-                                 std::string const&         class_balance = "balanced",
-                                 TreeDepthIdx_t             max_depth = 3,
-                                 FeaturesIdx_t              max_features = 0,
-                                 unsigned long              max_thresholds = 0,
-                                 std::string const&         missing_values = "None",
-                                 long                       random_state_seed = 0);
+        DecisionForestClassifier(std::vector<std::vector<std::string>> const&   classes,
+                                 std::vector<std::string> const&                features,
+                                 unsigned long                                  n_estimators = 100,
+                                 bool                                           bootstrap = false,
+                                 bool                                           oob_score = false,
+                                 std::string const&                             class_balance = "balanced",
+                                 TreeDepthIdx_t                                 max_depth = 3,
+                                 FeaturesIdx_t                                  max_features = 0,
+                                 unsigned long                                  max_thresholds = 0,
+                                 std::string const&                             missing_values = "None",
+                                 long                                           random_state_seed = 0);
 
         /// Build a decision forest classifier from the training data.
         /**
         @param[in]  X          Training input samples [n_samples x n_features].
         @param[in]  y          Target class labels corresponding to the training input samples [n_samples].
-        @param[in]  n_samples  Number of samples, minimum 2.
         */
-        void fit(Features_t*   X,
-                 Classes_t*    y,
-                 SamplesIdx_t  n_samples);
+        void fit(std::vector<Features_t> &   X,
+                 std::vector<Classes_t> &    y);
 
         /// Predict classes probabilities for the test data.
         /**
         @param[in]      X          Test input samples [n_samples x n_features].
         @param[in]      n_samples  Number of samples in the test data.
         @param[in,out]  y_prob     Class probabilities corresponding to the test input samples [n_samples x n_classes].
+        We use n_classes_max to create a nice 3D array to hold the predicted values x samples x classes
+        as the number of classes can be different for different outputs.<br>
+        Using 1d array addressing for X and y_prob to support efficient Cython bindings to Python using memory views.
         */
-        void predict_proba(Features_t *X,
-                           SamplesIdx_t n_samples,
-                           double *y_prob);
+        void  predict_proba(Features_t*   X,
+                            SamplesIdx_t  n_samples,
+                            double*       y_prob);
 
         /// Predict classes for the test data.
         /**
         @param[in]      X          Test input samples [n_samples x n_features].
         @param[in]      n_samples  Number of samples in the test data.
-        @param[in,out]  y          Predicted classes for the test input samples [n_samples].
+        @param[in,out]  y          Predicted classes for the test input samples [n_samples].<br>
+        Using 1d array addressing for X and y to support efficient Cython bindings to Python using memory views.
         */
-        void predict(Features_t *X,
-                     SamplesIdx_t n_samples,
-                     Classes_t *y);
+        void  predict(Features_t*   X,
+                      SamplesIdx_t  n_samples,
+                      Classes_t*    y);
 
         /// Calculate score for the test data.
         /**
         @param[in]      X          Test input samples [n_samples x n_features].
         @param[in]      y          True classes for the test input samples [n_samples].
         @param[in]      n_samples  Number of samples in the test data.
-        @return                    Score.
+        @return                    Score.<br>
+        Using 1d array addressing for X and y to support efficient Cython bindings to Python using memory views.
         */
         double score(Features_t*   X,
                      Classes_t*    y,

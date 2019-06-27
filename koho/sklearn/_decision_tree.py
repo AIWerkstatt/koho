@@ -6,7 +6,7 @@
 - Missing values (Not Missing At Random (NMAR))
 - Class balancing
 - Multi-Class
-- Single-Output
+- Multi-Output (single model)
 - Build order: depth first
 - Impurity criteria: gini
 - Split a. features: best over k (incl. all) random features
@@ -34,9 +34,12 @@ Python interface compatible with scikit-learn.
 import numbers
 import numpy as np
 import scipy
-from sklearn.base import BaseEstimator, ClassifierMixin
-from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
+import operator
+from functools import reduce
+from sklearn.base import BaseEstimator, ClassifierMixin, MultiOutputMixin
+from sklearn.utils.validation import check_X_y, check_array, check_is_fitted, check_consistent_length
 from sklearn.utils.multiclass import unique_labels
+
 from io import StringIO
 
 # Cython binding for C++ implementation
@@ -47,8 +50,8 @@ from ._decision_tree_cpp import RandomState, Tree, DepthFirstTreeBuilder
 # ==============================================================================
 
 
-class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
-    """ A decision tree classifier.
+class DecisionTreeClassifier(BaseEstimator, ClassifierMixin, MultiOutputMixin):
+    """ A decision tree classifier.,
 
     Parameters
     ----------
@@ -124,11 +127,15 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
 
     Attributes
     ----------
-    classes_ : array, shape = [n_classes]
-        The classes labels.
 
-    n_classes_ : int
-        The number of classes.
+    n_outputs_ : int
+        The number of outputs (multi-output).
+
+    classes_ : list of variable size arrays, shape = [n_classes for each output]
+        The classes labels for each output.
+
+    n_classes_ : list of int
+        The number of classes for each output.
 
     n_features_ : int
         The number of features.
@@ -181,7 +188,7 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
         X : array, shape = [n_samples, n_features]
             The training input samples.
 
-        y : array, shape = [n_samples]
+        y : array, shape = [n_samples] or [n_samples, n_outputs]
             The target class labels corresponding to the training input samples.
 
         Returns
@@ -196,30 +203,49 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
         # Check X, y
 
         if self.missing_values == 'NMAR':
-            X, y = check_X_y(X, y, dtype=np.float64, order="C", force_all_finite='allow-nan')
+            X, y = check_X_y(X, y, dtype=np.float64, order="C", force_all_finite='allow-nan', multi_output=True)
         else:
-            X, y = check_X_y(X, y, dtype=np.float64, order="C")
+            X, y = check_X_y(X, y, dtype=np.float64, order="C", multi_output=True)
 
-        # Determine attributes from training data
-
-        self.classes_ = unique_labels(y)  # Keep to raise required ValueError tested by 'check_estimator()'
-        self.classes_, y = np.unique(y, return_inverse=True)  # Encode y from classes to integers
-        self.n_classes_ = self.classes_.shape[0]
         n_samples, self.n_features_ = X.shape
 
-        # Calculate class weights
-        # so that n_samples == sum of all weighted samples
-        # Note that scikit-learn provides:
-        # 'compute_class_weight(self.class_balance, self.classes_, y)'
+        # Handle multi-outputs
+        if y.ndim == 1:  # 2D format for single-output and multi-output
+            y = np.reshape(y, (-1, 1))
+        self.n_outputs_ = y.shape[1]
 
-        mean_samples_per_class = y.shape[0] / self.n_classes_
+        if y.shape[0] != n_samples:
+            raise ValueError("Mismatch: n_outputs, n_features and n_samples.")
+
+        self.classes_ = []  # lists with an element for each output
+        self.n_classes_ = np.zeros(self.n_outputs_, dtype=np.uint)
+        y_int = np.zeros(y.shape, dtype=np.int)  # make sure y is integer
+        for o in range(self.n_outputs_):  # process each output independently
+            o_classes = unique_labels(y[:, o])  # Keep to raise required ValueError tested by 'check_estimator()'
+            o_classes, y_int[:, o] = np.unique(y[:, o], return_inverse=True)  # Encode y from classes to integers
+            self.classes_.append(o_classes)
+            self.n_classes_[o] = o_classes.shape[0]
+        if self.n_outputs_ == 1:
+            self.classes_ = reduce(operator.concat, self.classes_)
+
+        # Calculate class weights for each output separately
+        # so that n_samples == sum of all weighted samples
+        # Note that scikit-learn provides: 'compute_class_weight()' and 'compute_sample_weight()'
+        # which multiplies the sample_weights of each output together to a single sample_weight
+        # for multi-output (single model).
+
+        # we use max(n_classes_) to create a nice 2D array to hold the class weights
+        # as the number of classes can be different for different outputs
+        class_weight = np.ones(shape=(self.n_outputs_, max(self.n_classes_)), dtype=np.float64)
         if self.class_balance is not None:
             if isinstance(self.class_balance, str):
                 if self.class_balance in ['balanced']:
-                    # The 'balanced' mode uses the values of y to
-                    # automatically adjust weights inversely proportional
-                    # to class frequencies in the input data.
-                    class_weight = mean_samples_per_class / np.bincount(y)
+                    for o in range(self.n_outputs_):  # process each output independently
+                        # The 'balanced' mode uses the values of y to
+                        # automatically adjust weights inversely proportional
+                        # to class frequencies in the input data.
+                        mean_samples_per_class = y_int[:, o].shape[0] / self.n_classes_[o]
+                        class_weight[o, :self.n_classes_[o]] = mean_samples_per_class / np.bincount(y_int[:, o])
                 else:
                     raise ValueError("class_balance: unsupported string \'%s\', "
                                      "only 'balanced' is supported."
@@ -227,8 +253,6 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
             else:
                 raise TypeError("class_balance: %s is not supported."
                                 % self.class_balance)
-        else:
-            class_weight = np.ones(self.classes_.shape[0], dtype=np.float64)
 
         # Check hyperparameters (here, not in __init__)
 
@@ -335,12 +359,12 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
         # -------------------
 
         # Initialize the tree builder
-        builder = DepthFirstTreeBuilder(
-            self.n_classes_, self.n_features_, n_samples, class_weight,
-            max_depth, max_features, max_thresholds, missing_values, random_state)
+        builder = DepthFirstTreeBuilder(self.n_outputs_, self.n_classes_, max(self.n_classes_), self.n_features_,
+                                        n_samples, class_weight, max_depth, max_features, max_thresholds,
+                                        missing_values, random_state)
 
         # Create an empty tree
-        self.tree_ = Tree(self.n_classes_, self.n_features_)
+        self.tree_ = Tree(self.n_outputs_, self.n_classes_, self.n_features_)
 
         # Build a decision tree from the training data X, y
 
@@ -349,7 +373,7 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
         if not X.flags.writeable:
             X = X.copy()
 
-        builder.build(self.tree_, X, y)
+        builder.build(self.tree_, X, y_int)
 
         # Return the classifier
         return self
@@ -364,18 +388,45 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
 
         Returns
         -------
-        y : array, shape = [n_samples]
+        y : array, shape = [n_samples] or [n_samples, n_outputs]
             The predicted classes for the test input samples.
         """
 
+        # Check that fit has been called
+        check_is_fitted(self, ['tree_'])
+
+        # Check X
+        if self.missing_values == 'NMAR':
+            X = check_array(X, dtype=np.float64, order="C", force_all_finite='allow-nan')
+        else:
+            X = check_array(X, dtype=np.float64, order="C")
+
+        n_samples = X.shape[0]
+        n_classes_max = max(self.n_classes_)
+
         # Predict classes probabilities
         class_probablities = self.predict_proba(X)
+        # Handle single-output and multi-outputs formatting
+        # 2D format for single-output and multi-output
+        class_probablities = np.reshape(class_probablities, (-1, self.n_outputs_, n_classes_max))
 
-        # Determine class based on highest classes probabilities
-        predictions = np.argmax(class_probablities, axis=1)
+        # Handle multi-outputs formatting
+        y = []
+        if self.n_outputs_ == 1:
+            # Determine class based on highest classes probabilities
+            predictions = np.argmax(class_probablities[:, 0], axis=1)
+            # Decode y back from integers to classes
+            y = self.classes_.take(predictions, axis=0)
+        else:
+            for o in range(self.n_outputs_):
+                # Determine class based on highest classes probabilities
+                predictions = np.argmax(class_probablities[:, o], axis=1)
+                # Decode y back from integers to classes
+                y.append(self.classes_[o].take(predictions, axis=0))
+            y = np.array(y)
+            y = np.reshape(y.transpose(), (-1, self.n_outputs_)) # 2D format for multi-output
 
-        # Decode y back from integers to classes
-        return self.classes_.take(predictions, axis=0)
+        return y
 
     def predict_proba(self, X):
         """ Predict classes probabilities for the test data.
@@ -387,7 +438,7 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
 
         Returns
         -------
-        p : array, shape = [n_samples, n_classes]
+        p : array, shape = [n_samples x n_classes] or [n_samples x n_outputs x n_classes_max]
             The predicted classes probabilities for the test input samples.
         """
 
@@ -415,7 +466,55 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
 
         proba = self.tree_.predict(X)
 
+        # Handle single-output and multi-outputs formatting
+        n_classes_max = max(self.n_classes_)
+        if self.n_outputs_ == 1:
+            proba = np.reshape(proba, (-1, self.n_classes_[0]))
+        else:
+            proba = np.reshape(proba, (-1, self.n_outputs_, n_classes_max))
+
         return proba
+
+
+    def score(self, X, y):
+        """Returns the mean accuracy on the given test data and labels.
+
+        sklearn has no metrics support for "multiclass-multioutput" format,
+        therefore we implement our own score() here
+
+        In multi-label classification, this is the subset accuracy
+        which is a harsh metric since you require for each sample that
+        each label set be correctly predicted.
+
+        Parameters
+        ----------
+        X : array-like, shape = (n_samples, n_features)
+            Test samples.
+
+        y : array-like, shape = (n_samples) or (n_samples, n_outputs)
+            True labels for X.
+
+        Returns
+        -------
+        score : float
+            Mean accuracy of self.predict(X) wrt. y.
+
+        """
+
+        y_pred = self.predict(X)
+
+        # Handle single-output and multi-outputs formatting
+        y = y.ravel()
+        y_pred = y_pred.ravel()
+
+        # No metrics support "multiclass-multioutput" format
+        # y_type, y, y_pred = _check_targets(y, y_pred)
+        check_consistent_length(y, y_pred)
+
+        score = np.average(y == y_pred)
+
+        return score
+
 
     @property
     def feature_importances_(self):
@@ -463,16 +562,25 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
             impurity = tree.get_node_impurity(node_id)
 
             # Prediction
-            n = sum(histogram)
-            p_c = histogram / n
-            c = np.argmax(p_c)
-            # formatting
-            p_c = [int(x) if x % 1 == 0 else round(float(x), 2) for x in p_c]
+            n = sum(histogram[0]) # use histogram from 1st output, all the same
+            p_c = [0.0]*tree.get_n_outputs()
+            c = [0]*tree.get_n_outputs()
+            for o in range(tree.get_n_outputs()):
+                p_c[o] = histogram[o] / n
+                c[o] = np.argmax(p_c[o])
+                # formatting
+                p_c[o] = [int(x) if x % 1 == 0 else round(float(x), 2) for x in p_c[o]]
 
             # Node color and intensity based on classification and impurity
-            (r, g, b) = rgb_LUT[c]
-            max_impurity = 1.0 - (1.0 / tree.get_n_classes())
-            alpha = int(255 * (max_impurity - impurity) / max_impurity)
+            classes_combination = c[0]
+            for o in range(1, tree.get_n_outputs()):
+                classes_combination += tree.get_n_classes()[o-1] * c[o]
+            (r, g, b) = rgb_LUT[classes_combination]
+            max_impurity = [0.0]*tree.get_n_outputs()
+            for o in range(0, tree.get_n_outputs()):
+                max_impurity[o] = 1.0 - (1.0 / tree.get_n_classes()[o])
+            max_impurity_avrg = sum(max_impurity) / tree.get_n_outputs()
+            alpha = int(255 * (max_impurity_avrg - impurity) / max_impurity_avrg)
             color = '#' + ''.join('{:02X}'.format(a) for a in [r, g, b, alpha])  # #RRGGBBAA hex format
 
             # Leaf node
@@ -480,11 +588,18 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
                 # leaf nodes do no have any children
                 # so we only need to test for one of the children
 
-                class_name = class_names[c] if class_names is not None else "%d" % c
-
                 # Node
-                dot_data.write('%d [label=\"%s\\n%s\", fillcolor=\"%s\"] ;\n'
-                               % (node_id, p_c, class_name, color))
+                dot_data.write('%d [label=\"' % node_id)
+                for o in range(tree.get_n_outputs()):
+                    dot_data.write('%s\\n' % p_c[o][:tree.get_n_classes()[o]])
+                if tree.get_n_outputs() == 1:
+                    class_name = class_names[c[0]] if class_names is not None else "%d" % c[0]
+                    dot_data.write('%s' % class_name)
+                else:
+                    for o in range(tree.get_n_outputs()):
+                        class_name = class_names[o][c[o]] if class_names is not None else "%d" % c[o]
+                        dot_data.write('%s\\n' % class_name)
+                dot_data.write('\", fillcolor=\"%s\"] ;\n' % color)
 
             # Split node
             else:
@@ -499,13 +614,14 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
 
                 change = False
                 if order:
+                    # Order children based on prediction from first output
                     # Left Child Prediction
-                    lc_histogram = tree.get_node_histogram(left_child)
+                    lc_histogram = tree.get_node_histogram(left_child)[0]
                     lc_c = np.argmax(lc_histogram)
                     lc_n = sum(lc_histogram)
                     lc_p_c = lc_histogram[lc_c] / lc_n
                     # Right Child Prediction
-                    rc_histogram = tree.get_node_histogram(right_child)
+                    rc_histogram = tree.get_node_histogram(right_child)[0]
                     rc_c = np.argmax(rc_histogram)
                     rc_n = sum(rc_histogram)
                     rc_p_c = rc_histogram[rc_c] / rc_n
@@ -527,9 +643,10 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
                 threshold = round(threshold, 3)
 
                 # Edge width based on (weighted) number of samples used for training
-                n_root = sum(tree.get_node_histogram(0))  # total number of samples used for training
-                n_left_child = sum(tree.get_node_histogram(left_child)) / n_root  # normalized
-                n_right_child = sum(tree.get_node_histogram(right_child)) / n_root
+                # use histogram from 1st output, all the same
+                n_root = sum(tree.get_node_histogram(0)[0])  # total number of samples used for training
+                n_left_child = sum(tree.get_node_histogram(left_child)[0]) / n_root  # normalized
+                n_right_child = sum(tree.get_node_histogram(right_child)[0]) / n_root
 
                 max_width = 10
 
@@ -558,10 +675,18 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
 
                 # - histogram
                 if node_id == 0:  # Root node with legend
-                    dot_data.write('\\np(class) = %s\\nclass, n = %s\"' % (p_c, int(round(n, 0))))
+                    dot_data.write('\\np(class) = ')
+                    for o in range(tree.get_n_outputs()):
+                        dot_data.write('%s\\n' % p_c[o][:tree.get_n_classes()[o]])
+                    dot_data.write('class, n = %s' % int(round(n, 0)))
                 else:
-                    dot_data.write('\\n%s\"' % p_c)
-                dot_data.write(', fillcolor=\"%s\"] ;\n' % color)
+                    dot_data.write('\\n')
+                    if tree.get_n_outputs() == 1:
+                        dot_data.write('%s' % p_c[0][:tree.get_n_classes()[0]])
+                    else:
+                        for o in range(tree.get_n_outputs()):
+                            dot_data.write('%s\\n' % p_c[o][:tree.get_n_classes()[o]])
+                dot_data.write('\", fillcolor=\"%s\"] ;\n' % color)
 
                 # Edges
                 # - left child
@@ -636,6 +761,16 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
         # Check that fit has been called
         check_is_fitted(self, ['tree_'])
 
+        # Handle single-output and multi-output formatting
+
+        if class_names is not None:
+            if isinstance(class_names, list) or isinstance(class_names, np.ndarray):
+                if self.tree_.get_n_outputs() == 1:
+                    class_names = np.array(class_names).ravel()
+            else:
+                raise TypeError("class_names type: %s is not supported." % type(class_names))
+
+
         dot_data = StringIO()
 
         dot_data.write('digraph Tree {\n')
@@ -647,8 +782,9 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
         if rotate:
             dot_data.write('rankdir=LR ;\n')  # left-right orientation
 
-        # Define rgb colors for the different classes
-        rgb_LUT = create_rgb_LUT(self.tree_.get_n_classes())
+        # Define rgb colors for the different classes over all outputs
+        n_classes_combinations = np.prod([self.tree_.get_n_classes()[o] for o in range(self.tree_.get_n_outputs())])
+        rgb_LUT = create_rgb_LUT(n_classes_combinations)
 
         # Process the tree recursively
         process_tree_recursively(self.tree_, 0)  # root node = 0
@@ -676,15 +812,18 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
             feature = tree.get_node_feature(node_id)
             NA = tree.get_node_NA(node_id)
             threshold = round(tree.get_node_threshold(node_id), 3)
-            histogram = [int(x) if x % 1 == 0 else round(float(x), 2) for x in tree.get_node_histogram(node_id)]
+            histogram = [[int(x) if x % 1 == 0 else round(float(x), 2) for x in tree.get_node_histogram(node_id)[o][:tree.get_n_classes()[o]]]
+                         for o in range(tree.get_n_outputs())]
 
             # Leaf node
             if left_child == 0:
                 # leaf nodes do no have any children
                 # so we only need to test for one of the children
 
-                data.write('%d' % node_id)
-                data.write(' %s; ' % histogram)
+                data.write('%d ' % node_id)
+                for o in range(tree.get_n_outputs()):
+                    data.write('%s' % histogram[o])
+                data.write('; ' % histogram[o])
 
             # Split node
             else:
@@ -697,7 +836,10 @@ class DecisionTreeClassifier(BaseEstimator, ClassifierMixin):
                     data.write(' NA')
                 if NA == 1:
                     data.write(' not NA')
-                data.write(' %s; ' % histogram)
+                data.write(' ')
+                for o in range(tree.get_n_outputs()):
+                    data.write('%s' % histogram[o])
+                data.write('; ' % histogram[o])
 
                 data.write('%d->%d; ' % (node_id, left_child))
                 data.write('%d->%d; ' % (node_id, right_child))

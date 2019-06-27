@@ -14,7 +14,7 @@ with a `scikit-learn`_ compatible **Python interface**.
 - Missing values (Not Missing At Random (NMAR))
 - Class balancing
 - Multi-Class
-- Single-Output
+- Multi-Output (single model)
 - Build order: depth first
 - Impurity criteria: gini
 - n Decision Trees with soft voting
@@ -245,23 +245,25 @@ We use a simple example for illustration purposes.
 
 .. code-block:: text
 
-    vector<string>  classes = {"A", "B"};
-    long            n_classes = classes.size();
-    vector<string>  features = {"a", "b", "c"};
-    long            n_features = features.size();
+    vector<vector<string>> classes = {{"0", "1", "2", "3", "4", "5", "6", "7"}};
+    vector<string> features = {"2^2", "2^1", "2^0"};
 
-    vector<double>  X = {0, 0, 0,
-                         0, 0, 1,
-                         0, 1, 0,
-                         0, 1, 1,
-                         0, 1, 1,
-                         1, 0, 0,
-                         1, 0, 0,
-                         1, 0, 0,
-                         1, 0, 0,
-                         1, 1, 1};
-    vector<long>    y = {0, 0, 1, 1, 1, 1, 1, 1, 1, 1};
-    unsigned long   n_samples = y.size();
+    vector<double> X = {0, 0, 0,
+                        0, 0, 1,
+                        0, 1, 0,
+                        0, 1, 1,
+                        1, 0, 0,
+                        1, 0, 1,
+                        1, 1, 0,
+                        1, 1, 1};
+    vector<long> y = {0,
+                      1,
+                      2,
+                      3,
+                      4,
+                      5,
+                      6,
+                      7};
 
 .. code-block:: text
 
@@ -273,14 +275,13 @@ We use a simple example for illustration purposes.
     // Hyperparameters
     string          class_balance  = "balanced";
     long            max_depth = 3;
-    long            max_features = n_features;
+    long            max_features = 0;
     long            max_thresholds = 0;
     string          missing_values = "None";
     // Random Number Generator
     long            random_state = 0;
 
-    DecisionTreeClassifier dtc(classes, n_classes,
-                               features, n_features,
+    DecisionTreeClassifier dtc(classes, features,
                                class_balance, max_depth,
                                max_features, max_thresholds,
                                missing_values,
@@ -290,16 +291,16 @@ We use a simple example for illustration purposes.
 
 .. code-block:: text
 
-    dfc.fit(&X[0], &y[0], n_samples);
+    dfc.fit(X, y);
 
 Feature Importances
 
 .. code-block:: text
 
-    vector<double> importances(n_features);
+    vector<double> importances(features.size());
     dtc.calculate_feature_importances(&importances[0]);
     for (auto i: importances) cout << i << ' ';
-    // 0.454545 0.545455 0
+    // 0.571429 0.142857 0.285714
 
 Visualize Trees
 
@@ -334,7 +335,14 @@ Export a tree in a compact textual format:
 .. code-block:: text
 
     cout << dtc.export_text() << endl;
-    // 0 X[0]<=0.5 [5, 5]; 0->1; 0->4; 1 X[1]<=0.5 [5, 1.875]; 1->2; 1->3; 2 [5, 0]; 3 [0, 1.875]; 4 [0, 3.125];
+    // 0 X[1]<=0.5 [1, 1, 1, 1, 1, 1, 1, 1];
+    // 0->1; 0->8; 1 X[2]<=0.5 [1, 1, 0, 0, 1, 1, 0, 0];
+    // 1->2; 1->5; 2 X[0]<=0.5 [1, 0, 0, 0, 1, 0, 0, 0];
+    // 2->3; 2->4; 3 [1, 0, 0, 0, 0, 0, 0, 0]; 4 [0, 0, 0, 0, 1, 0, 0, 0]; 5 X[0]<=0.5 [0, 1, 0, 0, 0, 1, 0, 0];
+    // 5->6; 5->7; 6 [0, 1, 0, 0, 0, 0, 0, 0]; 7 [0, 0, 0, 0, 0, 1, 0, 0]; 8 X[2]<=0.5 [0, 0, 1, 1, 0, 0, 1, 1];
+    // 8->9; 8->12; 9 X[0]<=0.5 [0, 0, 1, 0, 0, 0, 1, 0];
+    // 9->10; 9->11; 10 [0, 0, 1, 0, 0, 0, 0, 0]; 11 [0, 0, 0, 0, 0, 0, 1, 0]; 12 X[0]<=0.5 [0, 0, 0, 1, 0, 0, 0, 1];
+    // 12->13; 12->14; 13 [0, 0, 0, 1, 0, 0, 0, 0]; 14 [0, 0, 0, 0, 0, 0, 0, 1];
 
 Persistence
 
@@ -351,7 +359,7 @@ Persistence
     vector<long>    c(n_samples, 0);
     dtc2.predict(&X[0], n_samples, &c[0]);
     for (auto i: c) cout << i << ' ';
-    // 0 0 1 1 1 1 1 1 1 1
+    // 0 1 2 3 4 5 6 7
 
 **Testing**
 
@@ -364,28 +372,27 @@ Persistence
 Tested Version
 ==============
 
-``koho`` 1.0.0,
+``koho`` 1.1.0,
 python 3.7.3,
-cython 0.29.7,
-gcc 7.3.0 C++ 17,
+cython 0.29.10,
+gcc 7.4.0 C++ 17,
 git 2.17.1,
-conda 4.6.8,
+conda 4.6.14,
 pip 19.0.3,
-numpy 1.16.2,
-scipy 1.2.1,
-scikit-learn 0.20.3,
-python-graphviz 0.10.1,
+numpy 1.16.4,
+scipy 1.3.0,
+scikit-learn 0.21.2,
+python-graphviz 0.11,
 jupyter 1.0.0,
 tornado 5.1.1,
 doxygen 1.8.13,
-sphinx 2.0.1,
-sphinx-gallery 0.3.1,
+sphinx 2.1.2,
+sphinx-gallery 0.4.0,
 sphinx_rtd_theme 0.4.3,
-matplotlib 3.0.3,
-numpydoc 0.8.0,
+matplotlib 3.1.0,
 pillow 6.0.0,
-pytest 4.4.0,
-pytest-cov 2.6.1,
-dask 1.1.5,
-distributed 1.26.1
+pytest 4.6.3,
+pytest-cov 2.7.1,
+dask 2.0.0,
+distributed 2.0.1
 

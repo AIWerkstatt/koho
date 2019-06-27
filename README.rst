@@ -22,7 +22,7 @@ with a `scikit-learn`_ compatible **Python interface**.
 - Missing values (Not Missing At Random (NMAR))
 - Class balancing
 - Multi-Class
-- Single-Output
+- Multi-Output (single model)
 - Build order: depth first
 - Impurity criteria: gini
 - n Decision Trees with soft voting
@@ -38,7 +38,10 @@ with a `scikit-learn`_ compatible **Python interface**.
 `New BSD License <LICENSE>`_
 
 **Change Log:**
-1.0.0 Initial Release
+1.1.0 Multi-Output (single model)
+1.0.0 Missing Values (NMAR) : Python, Cython(bindings), C++
+0.0.2 Criterion implemented in Cython
+0.0.1 Classification : Python only
 
 Copyright 2019, `AI Werkstatt (TM)`_. All rights reserved.
 

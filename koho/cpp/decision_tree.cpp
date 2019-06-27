@@ -13,6 +13,7 @@
 #include <iomanip>
 #include <algorithm>
 #include <limits>
+#include <set>
 
 #include "utilities.h"
 #include "decision_tree.h"
@@ -27,14 +28,14 @@ namespace koho {
 
     // Create a new node.
 
-    Node::Node(NodesIdx_t                  left_child,
-               NodesIdx_t                  right_child,
-               FeaturesIdx_t               feature,
-               int                         NA,
-               Features_t                  threshold,
-               const vector<Histogram_t>&  histogram,
-               double                      impurity,
-               double                      improvement)
+    Node::Node(NodesIdx_t                           left_child,
+               NodesIdx_t                           right_child,
+               FeaturesIdx_t                        feature,
+               int                                  NA,
+               Features_t                           threshold,
+               const vector<vector<Histogram_t>>&   histogram,
+               double                               impurity,
+               double                               improvement)
     : left_child(left_child),
       right_child(right_child),
       feature(feature),
@@ -54,29 +55,32 @@ namespace koho {
         fout.write((const char *) (&NA), sizeof(NA));
         fout.write((const char *) (&threshold), sizeof(threshold));
 
-        unsigned long  size = histogram.size();
-        fout.write((const char *) (&size), sizeof(size));
-        for (unsigned long i=0; i<size; ++i) {
-            fout.write((const char *) (&histogram[i]), sizeof(histogram[i]));
+        unsigned long  n_outputs = histogram.size();
+        fout.write((const char *) (&n_outputs), sizeof(n_outputs));
+        for (unsigned long o=0; o<n_outputs; ++o) {
+            unsigned long  n_classes = histogram[o].size();
+            fout.write((const char *) (&n_classes), sizeof(n_classes));
+            for (unsigned long c=0; c<n_classes; ++c) {
+                fout.write((const char *) (&histogram[o][c]), sizeof(histogram[o][c]));
+            }
         }
 
         fout.write((const char *) (&impurity), sizeof(impurity));
         fout.write((const char *) (&improvement), sizeof(improvement));
-
     }
 
     // Deserialize
 
     Node  Node::deserialize(ifstream& fin) {
 
-        NodesIdx_t           left_child;
-        NodesIdx_t           right_child;
-        FeaturesIdx_t        feature;
-        int                  NA;
-        Features_t           threshold;
-        vector<Histogram_t>  histogram;
-        double               impurity;
-        double               improvement;
+        NodesIdx_t                      left_child;
+        NodesIdx_t                      right_child;
+        FeaturesIdx_t                   feature;
+        int                             NA;
+        Features_t                      threshold;
+        vector<vector<Histogram_t>>     histogram;
+        double                          impurity;
+        double                          improvement;
 
         fin.read((char*)(&left_child), sizeof(left_child));
         fin.read((char*)(&right_child), sizeof(right_child));
@@ -84,12 +88,18 @@ namespace koho {
         fin.read((char*)(&NA), sizeof(NA));
         fin.read((char*)(&threshold), sizeof(threshold));
 
-        unsigned long  size;
-        fin.read((char*)(&size), sizeof(size));
-        for (unsigned long i=0; i<size; ++i) {
-            Histogram_t value;
-            fin.read((char*)(&value), sizeof(value));
-            histogram.emplace_back(value);
+        unsigned long  n_outputs;
+        fin.read((char*)(&n_outputs), sizeof(n_outputs));
+        for (OutputsIdx_t o=0; o<n_outputs; ++o) {
+            vector<Histogram_t> o_histogram;
+            unsigned long  n_classes;
+            fin.read((char*)(&n_classes), sizeof(n_classes));
+            for (unsigned long c=0; c<n_classes; ++c) {
+                Histogram_t value;
+                fin.read((char*)(&value), sizeof(value));
+                o_histogram.emplace_back(value);
+            }
+            histogram.emplace_back(o_histogram);
         }
 
         fin.read((char*)(&impurity), sizeof(impurity));
@@ -107,24 +117,54 @@ namespace koho {
 
     // Create a new tree without nodes.
 
-    Tree::Tree(ClassesIdx_t   n_classes,
-               FeaturesIdx_t  n_features)
-    : n_classes(n_classes),
+    Tree::Tree(OutputsIdx_t           n_outputs,
+               vector<ClassesIdx_t>   n_classes,
+               FeaturesIdx_t          n_features)
+
+    : n_outputs(n_outputs),
+      n_classes(move(n_classes)),
       n_features(n_features),
       max_depth(0),
-      node_count(0) { }
+      node_count(0) {
+
+        // for convenience
+
+        Tree::n_classes_max = *max_element(begin(Tree::n_classes), end(Tree::n_classes));
+    }
+
+
+    // Create a new tree without nodes for Python binding.
+
+    Tree::Tree(OutputsIdx_t           n_outputs,
+               ClassesIdx_t*          n_classes_ptr,
+               FeaturesIdx_t          n_features)
+
+            : n_outputs(n_outputs),
+              n_classes(n_outputs),
+              n_features(n_features),
+              max_depth(0),
+              node_count(0) {
+
+        // use pointer to array from Python binding
+        // copy data to std vector, which is much nicer to handle for serialization and deserialization
+        memcpy(&Tree::n_classes[0], n_classes_ptr, n_outputs*sizeof(ClassesIdx_t));
+
+        // for convenience
+
+        Tree::n_classes_max = *max_element(begin(Tree::n_classes), end(Tree::n_classes));
+    }
 
     // Add a new node to the tree.
 
-    NodesIdx_t  Tree::add_node(TreeDepthIdx_t              depth,
-                               NodesIdx_t                  parent_id,
-                               bool                        is_left,
-                               FeaturesIdx_t               feature,
-                               int                         NA,
-                               Features_t                  threshold,
-                               const vector<Histogram_t>&  histogram,
-                               double                      impurity,
-                               double                      improvement) {
+    NodesIdx_t  Tree::add_node(TreeDepthIdx_t                       depth,
+                               NodesIdx_t                           parent_id,
+                               bool                                 is_left,
+                               FeaturesIdx_t                        feature,
+                               int                                  NA,
+                               Features_t                           threshold,
+                               const vector<vector<Histogram_t>>&   histogram,
+                               double                               impurity,
+                               double                               improvement) {
 
         nodes.emplace_back(0, 0, // children IDs are set when the child nodes are added
                            feature, NA, threshold,
@@ -132,14 +172,14 @@ namespace koho {
 
         // Register new node as the child of its parent
 
-        NodesIdx_t  node_id = Tree::node_count++;
+        NodesIdx_t  node_id = node_count++;
         if (depth > 0) { // not root node
-            if (is_left) { Tree::nodes[parent_id].left_child  = node_id;
-            } else {       Tree::nodes[parent_id].right_child = node_id;
+            if (is_left) { nodes[parent_id].left_child  = node_id;
+            } else {       nodes[parent_id].right_child = node_id;
             }
         }
 
-        if (depth > Tree::max_depth) Tree::max_depth = depth;
+        if (depth > max_depth) max_depth = depth;
 
         return node_id;
     }
@@ -162,7 +202,9 @@ namespace koho {
          };
 
         // Initialize
-        memset(y_prob, 0, n_samples * Tree::n_classes * sizeof(double));
+        // We use n_classes_max to create a nice 3D array to hold the predicted values x samples x classes
+        // as the number of classes can be different for different outputs
+        memset(y_prob, 0, n_samples * n_outputs * n_classes_max * sizeof(double));
 
         // Loop: samples
         for(SamplesIdx_t i=0; i<n_samples; i++) {
@@ -179,27 +221,29 @@ namespace koho {
 	            IdxInfo node_idx = node_idx_stack.top();
 	            node_idx_stack.pop();
 
-                while (Tree::nodes[node_idx.idx].left_child > 0) { // follow path until leaf node
+                while (nodes[node_idx.idx].left_child > 0) { // follow path until leaf node
                 // leaf nodes do no have any children
                 // so we only need to test for one of the children
 
-                    if (isnan(X[i*n_features + Tree::nodes[node_idx.idx].feature])) { // missing value
+                    if (isnan(X[i*n_features + nodes[node_idx.idx].feature])) { // missing value
 
                         // Split criterion includes missing values
                         // Go to left or right child node depending on split (NA)
-                        if (Tree::nodes[node_idx.idx].NA == 0) // left
-                            node_idx.idx = Tree::nodes[node_idx.idx].left_child;
-                        else if (Tree::nodes[node_idx.idx].NA == 1) // right
-                            node_idx.idx = Tree::nodes[node_idx.idx].right_child;
+                        if (nodes[node_idx.idx].NA == 0) // left
+                            node_idx.idx = nodes[node_idx.idx].left_child;
+                        else if (nodes[node_idx.idx].NA == 1) // right
+                            node_idx.idx = nodes[node_idx.idx].right_child;
 
                         else { // Split criterion does NOT includes missing values
                             IdxInfo node_idx2 = node_idx;
-			                node_idx2.idx = Tree::nodes[node_idx.idx].right_child;  // right child
-			                double n_right = accumulate(Tree::nodes[node_idx2.idx].histogram.begin(),
-			                                            Tree::nodes[node_idx2.idx].histogram.end(), 0.0);
-			                node_idx.idx = Tree::nodes[node_idx.idx].left_child; // left child
-			                double n_left = accumulate(Tree::nodes[node_idx.idx].histogram.begin(),
-			                                           Tree::nodes[node_idx.idx].histogram.end(), 0.0);
+			                node_idx2.idx = nodes[node_idx.idx].right_child;  // right child
+                            // Histograms for all outputs have the same number of elements n
+                            // there only the histogram for the first output is used
+			                double n_right = accumulate(nodes[node_idx2.idx].histogram[0].begin(),
+			                                            nodes[node_idx2.idx].histogram[0].end(), 0.0);
+			                node_idx.idx = nodes[node_idx.idx].left_child; // left child
+			                double n_left = accumulate(nodes[node_idx.idx].histogram[0].begin(),
+			                                           nodes[node_idx.idx].histogram[0].end(), 0.0);
 			                node_idx.weight  *= n_left  / (n_left + n_right); // adjust weights
 			                node_idx2.weight *= n_right / (n_left + n_right);
                             node_idx_stack.emplace(node_idx2); // add right child as new path to node index stack
@@ -208,11 +252,11 @@ namespace koho {
 	                } else { // value
 
                         // Go to left or right child node depending on split (feature, threshold)
-                        if (X[i*Tree::n_features + Tree::nodes[node_idx.idx].feature] <=
-                            Tree::nodes[node_idx.idx].threshold)
-                            node_idx.idx = Tree::nodes[node_idx.idx].left_child;
+                        if (X[i*n_features + nodes[node_idx.idx].feature] <=
+                            nodes[node_idx.idx].threshold)
+                            node_idx.idx = nodes[node_idx.idx].left_child;
                         else
-                            node_idx.idx = Tree::nodes[node_idx.idx].right_child;
+                            node_idx.idx = nodes[node_idx.idx].right_child;
                     }
                 }
                 leaf_idx_stack.emplace(node_idx); // store leaf nodes
@@ -222,20 +266,22 @@ namespace koho {
 	            IdxInfo leaf_idx = leaf_idx_stack.top();
 	            leaf_idx_stack.pop();
 
-                // Calculate classes probabilities
+                // Calculate classes probabilities for each output
                 // based on number of samples per class histogram
-                double  normalizer = 0.0;
-                for (ClassesIdx_t c=0; c<Tree::n_classes; ++c)
-                    normalizer += Tree::nodes[leaf_idx.idx].histogram[c];
-                if (normalizer > 0.0) {
-                    for (ClassesIdx_t c = 0; c < Tree::n_classes; ++c) {
-                        y_prob[i * Tree::n_classes + c] +=
-                            leaf_idx.weight * Tree::nodes[leaf_idx.idx].histogram[c] / normalizer;
+                for (OutputsIdx_t o=0; o<n_outputs; ++o) {
+                    double normalizer = 0.0;
+                    for (ClassesIdx_t c = 0; c < n_classes[o]; ++c)
+                        normalizer += nodes[leaf_idx.idx].histogram[o][c];
+                    if (normalizer > 0.0) {
+                        for (ClassesIdx_t c = 0; c < n_classes[o]; ++c) {
+                            y_prob[i * n_outputs * n_classes_max +
+                                   o * n_classes_max + c] +=
+                                    leaf_idx.weight * nodes[leaf_idx.idx].histogram[o][c] / normalizer;
+                        }
                     }
                 }
             }
         }
-
     }
 
     // Calculate feature importances from the decision tree.
@@ -243,27 +289,27 @@ namespace koho {
     void  Tree::calculate_feature_importances(double* importances) {
 
         // Initialize
-        memset(importances, 0, Tree::n_features * sizeof(double));
+        memset(importances, 0, n_features * sizeof(double));
 
-        if (Tree::node_count == 0) return;
+        if (node_count == 0) return;
 
         // Loop: all nodes
-        for (NodesIdx_t idx=0; idx<Tree::node_count; ++idx) {
+        for (NodesIdx_t idx=0; idx<node_count; ++idx) {
 
             // Split node
             // leaf nodes do no have any children
             // so we only need to test for one of the children
-            if (Tree::nodes[idx].left_child > 0) {
+            if (nodes[idx].left_child > 0) {
                 // Accumulate improvements per feature
-                importances[Tree::nodes[idx].feature] += Tree::nodes[idx].improvement;
+                importances[nodes[idx].feature] += nodes[idx].improvement;
             }
         }
 
         // Normalize (to 1)
         double  normalizer = 0.0;
-        for (FeaturesIdx_t f=0; f<Tree::n_features; ++f) normalizer += importances[f];
+        for (FeaturesIdx_t f=0; f<n_features; ++f) normalizer += importances[f];
         if (normalizer > 0.0) { // 0 when root is pure
-            for (FeaturesIdx_t f=0; f<Tree::n_features; ++f) {
+            for (FeaturesIdx_t f=0; f<n_features; ++f) {
                 importances[f] = importances[f] / normalizer;
             }
         }
@@ -274,7 +320,13 @@ namespace koho {
 
     void  Tree::serialize(ofstream& fout) {
 
-        fout.write((const char *)&n_classes, sizeof(n_classes));
+        fout.write((const char *)&n_outputs, sizeof(n_outputs));
+
+        // Serialize Number of Classes (multi-output)
+        for (OutputsIdx_t o=0; o<n_outputs; ++o) {
+            fout.write((const char *) (&n_classes[o]), sizeof(n_classes[o]));
+        }
+
         fout.write((const char *)&n_features, sizeof(n_features));
         fout.write((const char *)&max_depth, sizeof(max_depth));
         fout.write((const char *)&node_count, sizeof(node_count));
@@ -290,7 +342,15 @@ namespace koho {
 
     void  Tree::deserialize(ifstream& fin) {
 
-        fin.read((char*)(&n_classes), sizeof(n_classes));
+        fin.read((char*)(&n_outputs), sizeof(n_outputs));
+
+        // Deserialize Number of Classes (multi-output)
+        for (OutputsIdx_t o=0; o<n_outputs; ++o) {
+            ClassesIdx_t value;
+            fin.read((char*)(&value), sizeof(value));
+            n_classes.emplace_back(value);
+        }
+
         fin.read((char*)(&n_features), sizeof(n_features));
         fin.read((char*)(&max_depth), sizeof(max_depth));
         fin.read((char*)(&node_count), sizeof(node_count));
@@ -308,64 +368,73 @@ namespace koho {
 
     // Create and initialize a new gini criterion.
 
-    GiniCriterion::GiniCriterion(ClassesIdx_t     n_classes,
+    GiniCriterion::GiniCriterion(OutputsIdx_t     n_outputs,
+                                 ClassesIdx_t*    n_classes,
+                                 ClassesIdx_t     n_classes_max,
                                  SamplesIdx_t     n_samples,
                                  ClassWeights_t*  class_weight)
-    : n_classes(n_classes),
+    : n_outputs(n_outputs),
+      n_classes(n_classes),
+      n_classes_max(n_classes_max),
       n_samples(n_samples),
       class_weight(class_weight),
       // Create and initialize histograms
       // - all samples
-      node_weighted_histogram(n_classes, 0),
-      node_weighted_n_samples(0.0),
-      node_impurity(0.0),
+      node_weighted_histogram(n_outputs, vector<Histogram_t> (n_classes_max, 0)),
+      node_weighted_n_samples(n_outputs, 0.0),
+      node_impurity(n_outputs, 0.0),
       // - samples with missing values
-      node_weighted_histogram_NA(n_classes, 0),
-      node_weighted_n_samples_NA(0.0),
-      node_impurity_NA(0.0),
+      node_weighted_histogram_NA(n_outputs, vector<Histogram_t> (n_classes_max, 0)),
+      node_weighted_n_samples_NA(n_outputs, 0.0),
+      node_impurity_NA(n_outputs, 0.0),
       // - samples with values
-      node_weighted_histogram_values(n_classes, 0),
-      node_weighted_n_samples_values(0.0),
-      node_impurity_values(0.0),
+      node_weighted_histogram_values(n_outputs, vector<Histogram_t> (n_classes_max, 0)),
+      node_weighted_n_samples_values(n_outputs, 0.0),
+      node_impurity_values(n_outputs, 0.0),
       node_pos_NA(0),
       // - samples with values smaller than threshold (assigned to left child)
-      node_weighted_histogram_threshold_left(n_classes, 0),
-      node_weighted_n_samples_threshold_left(0.0),
-      node_impurity_threshold_left(0.0),
+      node_weighted_histogram_threshold_left(n_outputs, vector<Histogram_t> (n_classes_max, 0)),
+      node_weighted_n_samples_threshold_left(n_outputs, 0.0),
+      node_impurity_threshold_left(n_outputs, 0.0),
       // -- plus missing values (assigned to left child)
-      node_weighted_n_samples_threshold_left_NA(0.0),
-      node_impurity_threshold_left_NA(0.0),
+      node_weighted_n_samples_threshold_left_NA(n_outputs, 0.0),
+      node_impurity_threshold_left_NA(n_outputs, 0.0),
       // - samples with values greater than threshold (assigned to right child)
-      node_weighted_histogram_threshold_right(n_classes, 0),
-      node_weighted_n_samples_threshold_right(0.0),
-      node_impurity_threshold_right(0.0),
+      node_weighted_histogram_threshold_right(n_outputs, vector<Histogram_t> (n_classes_max, 0)),
+      node_weighted_n_samples_threshold_right(n_outputs, 0.0),
+      node_impurity_threshold_right(n_outputs, 0.0),
       // -- plus missing values (assigned to right child)
-      node_weighted_n_samples_threshold_right_NA(0.0),
-      node_impurity_threshold_right_NA(0.0),
-      node_pos_threshold(0) { }
+      node_weighted_n_samples_threshold_right_NA(n_outputs, 0.0),
+      node_impurity_threshold_right_NA(n_outputs, 0.0),
+      node_pos_threshold(0) {  }
 
-    // Calculate weighted class histogram for current node.
+    // Calculate weighted class histograms for all outputs for current node.
 
     void  GiniCriterion::calculate_node_histogram(Classes_t*             y,
                                                   vector<SamplesIdx_t>&  samples,
                                                   SamplesIdx_t           start,
                                                   SamplesIdx_t           end) {
 
-        // Calculate class histogram
-        vector<Histogram_t>  histogram(GiniCriterion::n_classes, 0);
-        for (SamplesIdx_t i=start; i<end; ++i) {
-            histogram[y[samples[i]]]++;
-        }
+        for (unsigned long o=0; o<n_outputs; ++o) { // process each output independently
 
-        // Apply class weights
-        GiniCriterion::node_weighted_n_samples = 0.0;
-        Histogram_t  weighted_cnt;
-        for (ClassesIdx_t c=0; c<GiniCriterion::n_classes; ++c) {
-            weighted_cnt = GiniCriterion::class_weight[c] * histogram[c];
-            GiniCriterion::node_weighted_histogram[c] = weighted_cnt;
-            GiniCriterion::node_weighted_n_samples += weighted_cnt;
-        }
+            // Calculate class histogram
+            // we use n_classes_max to create a nice 2D array to hold the class histograms
+            // as the number of classes can be different for different outputs
+            vector<Histogram_t>     histogram(n_classes_max, 0);
 
+            for (SamplesIdx_t i = start; i < end; ++i) {
+                histogram[y[samples[i] * n_outputs + o]]++;
+            }
+
+            // Apply class weights
+            node_weighted_n_samples[o] = 0.0;
+            Histogram_t weighted_cnt;
+            for (ClassesIdx_t c = 0; c < n_classes[o]; ++c) {
+                weighted_cnt = class_weight[o * n_classes_max + c] * histogram[c];
+                node_weighted_histogram[o][c] = weighted_cnt;
+                node_weighted_n_samples[o] += weighted_cnt;
+            }
+        }
     }
 
     // Calculate impurity of a weighted class histogram using the Gini criterion.
@@ -385,58 +454,69 @@ namespace koho {
         return (sum_cnt > 0.0) ? (1.0 - sum_cnt_sq / (sum_cnt*sum_cnt)) : 0.0;
     }
 
-    // Calculate impurity of the current node.
+    // Calculate impurity for all outputs of the current node.
 
     void  GiniCriterion::calculate_node_impurity() {
 
-        GiniCriterion::node_impurity =
-            GiniCriterion::calculate_impurity(GiniCriterion::node_weighted_histogram);
+        for (unsigned long o=0; o<n_outputs; ++o) { // process each output independently
 
+            node_impurity[o] =
+                    calculate_impurity(node_weighted_histogram[o]);
+        }
     }
 
-    // Calculate class histograms for the samples with missing values and the samples with values.
+    // Calculate class histograms for all outputs for the samples with missing values and the samples with values.
 
-    void GiniCriterion::calculate_NA_histogram(Classes_t*                  y,
-                                               std::vector<SamplesIdx_t>&  samples,
-                                               SamplesIdx_t                pos) {
+    void GiniCriterion::calculate_NA_histogram(Classes_t*               y,
+                                               vector<SamplesIdx_t>&    samples,
+                                               SamplesIdx_t             pos) {
 
-        // Calculate class histogram for the samples with missing values located in samples[0:pos]
-        vector<Histogram_t>  histogram(GiniCriterion::n_classes, 0);
-        for (SamplesIdx_t i=0; i<pos; ++i) {
-            histogram[y[samples[i]]]++;
-        }
-        // Apply class weights
-        Histogram_t  weighted_cnt;
-        GiniCriterion::node_weighted_n_samples_NA = 0.0;
-        for (ClassesIdx_t c=0; c<GiniCriterion::n_classes; ++c) {
-            weighted_cnt = GiniCriterion::class_weight[c] * histogram[c];
-            GiniCriterion::node_weighted_histogram_NA[c] = weighted_cnt;
-            GiniCriterion::node_weighted_n_samples_NA += weighted_cnt;
-        }
+        for (unsigned long o = 0; o < n_outputs; ++o) { // process each output independently
 
-        // Calculate class histogram for samples with values
-        for (ClassesIdx_t c=0; c<GiniCriterion::n_classes; ++c) {
-            GiniCriterion::node_weighted_histogram_values[c] = GiniCriterion::node_weighted_histogram[c] -
-                                                               GiniCriterion::node_weighted_histogram_NA[c];
+            // Calculate class histogram for the samples with missing values located in samples[0:pos]
+            // we use n_classes_max to create a nice 2D array to hold the class histograms
+            // as the number of classes can be different for different outputs
+            vector<Histogram_t> histogram(n_classes_max, 0);
+
+            for (SamplesIdx_t i = 0; i < pos; ++i) {
+                histogram[y[samples[i] * n_outputs + o]]++;
+            }
+
+            // Apply class weights
+            node_weighted_n_samples_NA[o] = 0.0;
+            Histogram_t weighted_cnt;
+            for (ClassesIdx_t c = 0; c < n_classes[o]; ++c) {
+                weighted_cnt = class_weight[o*n_classes_max+c] * histogram[c];
+                node_weighted_histogram_NA[o][c] = weighted_cnt;
+                node_weighted_n_samples_NA[o] += weighted_cnt;
+            }
+
+            // Calculate class histogram for samples with values
+            for (ClassesIdx_t c = 0; c < n_classes[o]; ++c) {
+
+                node_weighted_histogram_values[o][c] = node_weighted_histogram[o][c] -
+                                                       node_weighted_histogram_NA[o][c];
+            }
+            node_weighted_n_samples_values[o] = node_weighted_n_samples[o] -
+                                                node_weighted_n_samples_NA[o];
         }
-        GiniCriterion::node_weighted_n_samples_values = GiniCriterion::node_weighted_n_samples -
-                                                        GiniCriterion::node_weighted_n_samples_NA;
 
         // Update position
-        GiniCriterion::node_pos_NA = pos;
-
+        node_pos_NA = pos;
     }
 
-    // Calculate impurity of samples with missing values and samples with values.
+    // Calculate impurity for all outputs of samples with missing values and samples with values.
 
     void  GiniCriterion::calculate_NA_impurity() {
 
-        GiniCriterion::node_impurity_NA =
-            GiniCriterion::calculate_impurity(GiniCriterion::node_weighted_histogram_NA);
+        for (unsigned long o=0; o<n_outputs; ++o) { // process each output independently
 
-        GiniCriterion::node_impurity_values =
-            GiniCriterion::calculate_impurity(GiniCriterion::node_weighted_histogram_values);
+            node_impurity_NA[o] =
+                    calculate_impurity(node_weighted_histogram_NA[o]);
 
+            node_impurity_values[o] =
+                    calculate_impurity(node_weighted_histogram_values[o]);
+        }
     }
 
     // Calculate impurity improvement from the current node to its children
@@ -444,198 +524,258 @@ namespace koho {
 
     double  GiniCriterion::calculate_NA_impurity_improvement() {
 
-        return (GiniCriterion::node_weighted_n_samples / GiniCriterion::n_samples) *
-               (GiniCriterion::node_impurity -
-                       (GiniCriterion::node_weighted_n_samples_NA / GiniCriterion::node_weighted_n_samples) *
-                        GiniCriterion::node_impurity_NA -
-                       (GiniCriterion::node_weighted_n_samples_values / GiniCriterion::node_weighted_n_samples) *
-                        GiniCriterion::node_impurity_values);
-        // OK to use "n_samples instead of "sum of all weighted samples"
-        // given the way the class weights are calculated
+        vector<double> impurity_improvement(n_outputs, 0.0);
+
+        for (unsigned long o=0; o<n_outputs; ++o) { // over all outputs
+
+            impurity_improvement[o] +=
+                   (node_weighted_n_samples[o] / n_samples) *
+                   (node_impurity[o] -
+                    (node_weighted_n_samples_NA[o] /
+                     node_weighted_n_samples[o]) *
+                    node_impurity_NA[o] -
+                    (node_weighted_n_samples_values[o] /
+                     node_weighted_n_samples[o]) *
+                    node_impurity_values[o]);
+            // OK to use "n_samples instead of "sum of all weighted samples"
+            // given the way the class weights are calculated
+        }
+
+        // average
+        return accumulate(impurity_improvement.begin(),impurity_improvement.end(), 0.0) / impurity_improvement.size();
     }
 
-    // Initialize class histograms for using a threshold on samples with values,
+    // Initialize class histograms for all outputs for using a threshold on samples with values,
     // in the case that all samples have values.
 
     void  GiniCriterion::init_threshold_histograms() {
 
-        // Initialize class histogram for left child to 0
-        // Initialize class histogram for right child to
-        // class histogram from the current node
-        for (ClassesIdx_t c=0; c<GiniCriterion::n_classes; ++c) {
-            GiniCriterion::node_weighted_histogram_threshold_left[c] = 0.0;
-            GiniCriterion::node_weighted_histogram_threshold_right[c] = GiniCriterion::node_weighted_histogram[c];
+        for (unsigned long o=0; o<n_outputs; ++o) { // process each output independently
+
+            // Initialize class histogram for left child to 0
+            // Initialize class histogram for right child to
+            // class histogram from the current node
+            for (ClassesIdx_t c = 0; c < n_classes[o]; ++c) {
+                node_weighted_histogram_threshold_left[o][c] = 0.0;
+                node_weighted_histogram_threshold_right[o][c] = node_weighted_histogram[o][c];
+            }
+            node_weighted_n_samples_threshold_left[o] = 0.0;
+            node_weighted_n_samples_threshold_right[o] = node_weighted_n_samples[o];
         }
-        GiniCriterion::node_weighted_n_samples_threshold_left = 0.0;
-        GiniCriterion::node_weighted_n_samples_threshold_right = GiniCriterion::node_weighted_n_samples;
 
         // Update current position
-        GiniCriterion::node_pos_threshold = 0;
-
+        node_pos_threshold = 0;
     }
 
-    // Initialize class histograms for using a threshold on samples with values,
+    // Initialize class histograms for all outputs for using a threshold on samples with values,
     // in the case that there are also samples with missing values.
 
     void  GiniCriterion::init_threshold_values_histograms() {
 
-        // Initialize class histogram for left child to 0
-        // Initialize class histogram for right child to
-        // class histogram of samples with values (vs missing values) from the current node
-        for (ClassesIdx_t c=0; c<GiniCriterion::n_classes; ++c) {
-            GiniCriterion::node_weighted_histogram_threshold_left[c] = 0.0;
-            GiniCriterion::node_weighted_histogram_threshold_right[c] = GiniCriterion::node_weighted_histogram_values[c];
+        for (unsigned long o=0; o<n_outputs; ++o) { // process each output independently
+
+            // Initialize class histogram for left child to 0
+            // Initialize class histogram for right child to
+            // class histogram of samples with values (vs missing values) from the current node
+            for (ClassesIdx_t c = 0; c < n_classes[o]; ++c) {
+                node_weighted_histogram_threshold_left[o][c] = 0.0;
+                node_weighted_histogram_threshold_right[o][c] = node_weighted_histogram_values[o][c];
+            }
+            node_weighted_n_samples_threshold_left[o] = 0.0;
+            node_weighted_n_samples_threshold_right[o] = node_weighted_n_samples_values[o];
         }
-        GiniCriterion::node_weighted_n_samples_threshold_left = 0.0;
-        GiniCriterion::node_weighted_n_samples_threshold_right = GiniCriterion::node_weighted_n_samples_values;
 
         // Update current position
-        GiniCriterion::node_pos_threshold = GiniCriterion::node_pos_NA;
+        node_pos_threshold = node_pos_NA;
 
     }
 
-    // Update class histograms for using a threshold on values,
+    // Update class histograms for all outputs for using a threshold on values,
     // from current position to the new position (correspond to thresholds).
 
     void  GiniCriterion::update_threshold_histograms(Classes_t*             y,
                                                      vector<SamplesIdx_t>&  samples,
                                                      SamplesIdx_t           new_pos) {
 
-        // Calculate class histogram for samples[pos:new_pos]
-        vector<Histogram_t>  histogram(GiniCriterion::n_classes, 0);
-        for (SamplesIdx_t i=GiniCriterion::node_pos_threshold; i<new_pos; ++i) {
-            histogram[y[samples[i]]]++;
-        }
+        for (unsigned long o = 0; o < n_outputs; ++o) { // process each output independently
 
-        // Add class histogram for samples[pos:new_pos]
-        // to class histogram for samples[0 or number missing values:pos] with values < threshold (left child)
-        // Subtract class histogram for samples[pos:new_pos]
-        // from class histogram for samples[pos: number of samples] with values > threshold (right child)
-        Histogram_t  weighted_cnt;
-        for (ClassesIdx_t c=0; c<GiniCriterion::n_classes; ++c) {
-            // Apply class weights
-            weighted_cnt = GiniCriterion::class_weight[c] * histogram[c];
-            // Left child
-            GiniCriterion::node_weighted_histogram_threshold_left[c] += weighted_cnt;
-            GiniCriterion::node_weighted_n_samples_threshold_left += weighted_cnt;
-            // Right child
-            GiniCriterion::node_weighted_histogram_threshold_right[c] -= weighted_cnt;
-            GiniCriterion::node_weighted_n_samples_threshold_right -= weighted_cnt;
+            // Calculate class histogram for samples[pos:new_pos]
+            vector<Histogram_t> histogram(n_classes_max, 0);
+            for (SamplesIdx_t i = node_pos_threshold; i < new_pos; ++i) {
+                histogram[y[samples[i] * n_outputs + o]]++;
+            }
+
+            // Add class histogram for samples[pos:new_pos]
+            // to class histogram for samples[0 or number missing values:pos] with values < threshold (left child)
+            // Subtract class histogram for samples[pos:new_pos]
+            // from class histogram for samples[pos: number of samples] with values > threshold (right child)
+            Histogram_t weighted_cnt;
+            for (ClassesIdx_t c = 0; c < n_classes[o]; ++c) {
+                // Apply class weights
+                weighted_cnt = class_weight[o * n_classes_max + c] * histogram[c];
+                // Left child
+                node_weighted_histogram_threshold_left[o][c] += weighted_cnt;
+                node_weighted_n_samples_threshold_left[o] += weighted_cnt;
+                // Right child
+                node_weighted_histogram_threshold_right[o][c] -= weighted_cnt;
+                node_weighted_n_samples_threshold_right[o] -= weighted_cnt;
+            }
         }
 
         // Update current position (correspond to a threshold)
-        GiniCriterion::node_pos_threshold = new_pos;
-
+        node_pos_threshold = new_pos;
     }
 
-    // Calculate impurity of samples with values that are smaller and greater than a threshold.
+    // Calculate impurity for all outputs of samples with values that are smaller and greater than a threshold.
     void  GiniCriterion::calculate_threshold_impurity() {
 
-        GiniCriterion::node_impurity_threshold_left =
-            GiniCriterion::calculate_impurity(GiniCriterion::node_weighted_histogram_threshold_left);
+        for (unsigned long o=0; o<n_outputs; ++o) { // process each output independently
 
-        GiniCriterion::node_impurity_threshold_right =
-            GiniCriterion::calculate_impurity(GiniCriterion::node_weighted_histogram_threshold_right);
+            node_impurity_threshold_left[o] =
+                    calculate_impurity(node_weighted_histogram_threshold_left[o]);
 
+            node_impurity_threshold_right[o] =
+                    calculate_impurity(node_weighted_histogram_threshold_right[o]);
+        }
     }
 
-    // Calculate the impurity of samples with values that are smaller and greater than a threshold
+    // Calculate the impurity for all outputs of samples with values that are smaller and greater than a threshold
     // and passing on the samples with missing values.
 
     void  GiniCriterion::calculate_threshold_NA_impurity() {
 
-        vector<Histogram_t>  histogram(GiniCriterion::node_weighted_histogram_NA.size(), 0.0);
+        for (unsigned long o=0; o<n_outputs; ++o) { // process each output independently
 
-        // Samples with values that are smaller than a threshold and the samples with missing values
-        for (ClassesIdx_t c=0; c<GiniCriterion::node_weighted_histogram_NA.size(); ++c) {
-            histogram[c] = GiniCriterion::node_weighted_histogram_threshold_left[c] +
-                           GiniCriterion::node_weighted_histogram_NA[c];
+            vector<Histogram_t> histogram(node_weighted_histogram_NA[o].size(), 0.0);
+
+            // Samples with values that are smaller than a threshold and the samples with missing values
+            for (ClassesIdx_t c = 0; c < node_weighted_histogram_NA[o].size(); ++c) {
+                histogram[c] = node_weighted_histogram_threshold_left[o][c] +
+                               node_weighted_histogram_NA[o][c];
+            }
+
+            node_impurity_threshold_left_NA[o] = calculate_impurity(histogram);
+
+            node_weighted_n_samples_threshold_left_NA[o] =
+                    node_weighted_n_samples_threshold_left[o] +
+                    node_weighted_n_samples_NA[o];
+
+            // Samples with values that are greater than a threshold and the samples with missing values
+            for (ClassesIdx_t c = 0; c < node_weighted_histogram_NA[o].size(); ++c) {
+                histogram[c] = node_weighted_histogram_threshold_right[o][c] +
+                               node_weighted_histogram_NA[o][c];
+            }
+
+            node_impurity_threshold_right_NA[o] = calculate_impurity(histogram);
+
+            node_weighted_n_samples_threshold_right_NA[o] =
+                    node_weighted_n_samples_threshold_right[o] +
+                    node_weighted_n_samples_NA[o];
         }
-
-        GiniCriterion::node_impurity_threshold_left_NA = GiniCriterion::calculate_impurity(histogram);
-
-        GiniCriterion::node_weighted_n_samples_threshold_left_NA =
-                GiniCriterion::node_weighted_n_samples_threshold_left + GiniCriterion::node_weighted_n_samples_NA;
-
-        // Samples with values that are greater than a threshold and the samples with missing values
-        for (ClassesIdx_t c=0; c<GiniCriterion::node_weighted_histogram_NA.size(); ++c) {
-            histogram[c] = GiniCriterion::node_weighted_histogram_threshold_right[c] +
-                           GiniCriterion::node_weighted_histogram_NA[c];
-        }
-
-        GiniCriterion::node_impurity_threshold_right_NA = GiniCriterion::calculate_impurity(histogram);
-
-        GiniCriterion::node_weighted_n_samples_threshold_right_NA =
-                GiniCriterion::node_weighted_n_samples_threshold_right + GiniCriterion::node_weighted_n_samples_NA;
-
     }
 
-    // Calculate the impurity improvement from the current node to its children
+    // Calculate the impurity improvement over all outputs from the current node to its children
     // assuming a split of the samples with values smaller and greater than a threshold
     // in the case that all samples have values.
 
     double  GiniCriterion::calculate_threshold_impurity_improvement() {
 
-        return (GiniCriterion::node_weighted_n_samples / GiniCriterion::n_samples) *
-               (GiniCriterion::node_impurity -
-                       (GiniCriterion::node_weighted_n_samples_threshold_left /
-                        GiniCriterion::node_weighted_n_samples) *
-                        GiniCriterion::node_impurity_threshold_left -
-                       (GiniCriterion::node_weighted_n_samples_threshold_right /
-                        GiniCriterion::node_weighted_n_samples) *
-                        GiniCriterion::node_impurity_threshold_right);
-        // OK to use "n_samples instead of "sum of all weighted samples"
-        // given the way the class weights are calculated
+        vector<double> impurity_improvement(n_outputs, 0.0);
+
+        for (unsigned long o=0; o<n_outputs; ++o) { // over all outputs
+
+            impurity_improvement[o] +=
+                   (node_weighted_n_samples[o] / n_samples) *
+                   (node_impurity[o] -
+                    (node_weighted_n_samples_threshold_left[o] /
+                     node_weighted_n_samples[o]) *
+                    node_impurity_threshold_left[o] -
+                    (node_weighted_n_samples_threshold_right[o] /
+                     node_weighted_n_samples[o]) *
+                    node_impurity_threshold_right[o]);
+            // OK to use "n_samples instead of "sum of all weighted samples"
+            // given the way the class weights are calculated
+        }
+
+        // average
+        return accumulate(impurity_improvement.begin(),impurity_improvement.end(), 0.0) / impurity_improvement.size();
     }
 
-    // Calculate the impurity improvement from the current node to its children
+    // Calculate the impurity improvement over all outputs from the current node to its children
     // assuming a split of the samples with values smaller and greater than a threshold
     // in the case that there are also samples with missing values.
 
     double  GiniCriterion::calculate_threshold_values_impurity_improvement() {
 
-        return (GiniCriterion::node_weighted_n_samples_values / GiniCriterion::n_samples) *
-               (GiniCriterion::node_impurity_values -
-                       (GiniCriterion::node_weighted_n_samples_threshold_left /
-                        GiniCriterion::node_weighted_n_samples_values) *
-                        GiniCriterion::node_impurity_threshold_left -
-                       (GiniCriterion::node_weighted_n_samples_threshold_right /
-                        GiniCriterion::node_weighted_n_samples_values) *
-                        GiniCriterion::node_impurity_threshold_right);
+        vector<double> impurity_improvement(n_outputs, 0.0);
+
+        for (unsigned long o=0; o<n_outputs; ++o) { // over all outputs
+
+            impurity_improvement[o] +=
+                      (node_weighted_n_samples_values[o] / n_samples) *
+                      (node_impurity_values[o] -
+                       (node_weighted_n_samples_threshold_left[o] /
+                        node_weighted_n_samples_values[o]) *
+                        node_impurity_threshold_left[o] -
+                       (node_weighted_n_samples_threshold_right[o] /
+                        node_weighted_n_samples_values[o]) *
+                        node_impurity_threshold_right[o]);
         // OK to use "n_samples instead of "sum of all weighted samples"
         // given the way the class weights are calculated
+        }
+
+        // average
+        return accumulate(impurity_improvement.begin(),impurity_improvement.end(), 0.0) / impurity_improvement.size();
     }
 
-    // Calculate the impurity improvement from the current node to its children
+    // Calculate the impurity improvement over all outputs from the current node to its children
     // assuming a split of the samples with values smaller and greater than a threshold
     // and passing on the samples with missing values to the left child.
 
     double  GiniCriterion::calculate_threshold_NA_left_impurity_improvement() {
 
-        return (GiniCriterion::node_weighted_n_samples / GiniCriterion::n_samples) *
-               (GiniCriterion::node_impurity -
-                   (GiniCriterion::node_weighted_n_samples_threshold_left_NA /
-                    GiniCriterion::node_weighted_n_samples) *
-                    GiniCriterion::node_impurity_threshold_left_NA -
-                   (GiniCriterion::node_weighted_n_samples_threshold_right /
-                    GiniCriterion::node_weighted_n_samples) *
-                    GiniCriterion::node_impurity_threshold_right);
+        vector<double> impurity_improvement(n_outputs, 0.0);
+
+        for (unsigned long o=0; o<n_outputs; ++o) { // over all outputs
+
+            impurity_improvement[o] +=
+               (node_weighted_n_samples[o] / n_samples) *
+               (node_impurity[o] -
+                   (node_weighted_n_samples_threshold_left_NA[o] /
+                    node_weighted_n_samples[o]) *
+                    node_impurity_threshold_left_NA[o] -
+                   (node_weighted_n_samples_threshold_right[o] /
+                    node_weighted_n_samples[o]) *
+                    node_impurity_threshold_right[o]);
+        }
+
+        // average
+        return accumulate(impurity_improvement.begin(),impurity_improvement.end(), 0.0) / impurity_improvement.size();
     }
 
-    // Calculate the impurity improvement from the current node to its children
+    // Calculate the impurity improvement over all outputs from the current node to its children
     // assuming a split of the samples with values smaller and greater than a threshold
     // and passing on the samples with missing values to the right child.
 
     double  GiniCriterion::calculate_threshold_NA_right_impurity_improvement() {
 
-        return (GiniCriterion::node_weighted_n_samples / GiniCriterion::n_samples) *
-               (GiniCriterion::node_impurity -
-                   (GiniCriterion::node_weighted_n_samples_threshold_left /
-                    GiniCriterion::node_weighted_n_samples) *
-                    GiniCriterion::node_impurity_threshold_left -
-                   (GiniCriterion::node_weighted_n_samples_threshold_right_NA /
-                    GiniCriterion::node_weighted_n_samples) *
-                    GiniCriterion::node_impurity_threshold_right_NA);
+        vector<double> impurity_improvement(n_outputs, 0.0);
+
+        for (unsigned long o=0; o<n_outputs; ++o) { // over all outputs
+
+            impurity_improvement[o] +=
+               (node_weighted_n_samples[o] / n_samples) *
+               (node_impurity[o] -
+                   (node_weighted_n_samples_threshold_left[o] /
+                    node_weighted_n_samples[o]) *
+                    node_impurity_threshold_left[o] -
+                   (node_weighted_n_samples_threshold_right_NA[o] /
+                    node_weighted_n_samples[o]) *
+                    node_impurity_threshold_right_NA[o]);
+        }
+
+        // average
+        return accumulate(impurity_improvement.begin(),impurity_improvement.end(), 0.0) / impurity_improvement.size();
     }
 
 // =============================================================================
@@ -644,7 +784,9 @@ namespace koho {
 
     // Create and initialize a new best splitter.
 
-    BestSplitter::BestSplitter(ClassesIdx_t         n_classes,
+    BestSplitter::BestSplitter(OutputsIdx_t         n_outputs,
+                               ClassesIdx_t*        n_classes,
+                               ClassesIdx_t         n_classes_max,
                                FeaturesIdx_t        n_features,
                                SamplesIdx_t         n_samples,
                                ClassWeights_t*      class_weight,
@@ -661,13 +803,13 @@ namespace koho {
       start(0),
       end(n_samples),
       // Create amd initialize a gini criterion
-      criterion(n_classes, n_samples, class_weight) {
+      criterion(n_outputs, n_classes, n_classes_max, n_samples, class_weight) {
 
         // Initialize samples[0, n_samples] to the training data X, y
         iota(samples.begin(), samples.end(), 0); // identity mapping
     }
 
-    // Initialize node and calculate weighted histogram and impurity for the node.
+    // Initialize node and calculate weighted histograms for all outputs and impurity for the node.
 
     void  BestSplitter::init_node(Classes_t*    y,
                                   SamplesIdx_t  start,
@@ -693,7 +835,7 @@ namespace koho {
                                       double&                improvement) {
 
         NA = -1; // no missing values
-        threshold = std::numeric_limits<double>::quiet_NaN(); // no threshold
+        threshold = numeric_limits<double>::quiet_NaN(); // no threshold
         pos = 0;
         improvement = 0.0; // leaf node
 
@@ -704,10 +846,10 @@ namespace koho {
         // Copy f_X=X[samples[start:end],f]
         // training data X for the current node.
 
-        SamplesIdx_t  n_samples = BestSplitter::end - BestSplitter::start;
+        SamplesIdx_t  n_samples = end - start;
         vector<Features_t>  f_X(n_samples);
         for (SamplesIdx_t i=0; i<n_samples; ++i) {
-            f_X[i] = X[s[i]*BestSplitter::n_features + feature];
+            f_X[i] = X[s[i]*n_features + feature];
         }
 
         // Detect samples with missing values and move them to the beginning of the samples vector
@@ -729,21 +871,21 @@ namespace koho {
 
         if (pNA > 0) { // missing values
 
-            // Calculate class histograms for the samples with missing values and the samples with values
-            BestSplitter::criterion.calculate_NA_histogram(y, s, pNA);
-            // Calculate impurity of samples with missing values and samples with values
-            BestSplitter::criterion.calculate_NA_impurity();
-            // Calculate impurity improvement from the current node to its children
+            // Calculate class histograms for all outputs for the samples with missing values and the samples with values
+            criterion.calculate_NA_histogram(y, s, pNA);
+            // Calculate impurity for all outputs of samples with missing values and samples with values
+            criterion.calculate_NA_impurity();
+            // Calculate impurity improvement over all outputs from the current node to its children
             // assuming a split between missing values and values
-            improvement = BestSplitter::criterion.calculate_NA_impurity_improvement();
+            improvement = criterion.calculate_NA_impurity_improvement();
             NA = 0; // pass all samples with missing values to the left child
             // pass all samples with values to the right child
-            threshold = std::numeric_limits<double>::quiet_NaN(); // no threshold
-            pos = BestSplitter::start + pNA;
+            threshold = numeric_limits<double>::quiet_NaN(); // no threshold
+            pos = start + pNA;
 
             // If impurity of all samples with values is 0.0 (pure) then stop
             // includes special case of having only 1 sample with a value
-            if (BestSplitter::criterion.get_node_impurity_values() < PRECISION_EQUAL) return;
+            if (criterion.get_node_impurity_values() < PRECISION_EQUAL) return;
         }
         // moving on we can assume that there are at least 2 samples with a value
 
@@ -760,11 +902,11 @@ namespace koho {
         if (f_min + PRECISION_EQUAL < f_max) {
 
             if (pNA == 0) {
-                // Initialize class histograms for using a threshold
-                BestSplitter::criterion.init_threshold_histograms();
+                // Initialize class histograms for all outputs for using a threshold
+                criterion.init_threshold_histograms();
             } else if (pNA > 0) {
-                // Initialize class histograms for using a threshold on samples with values
-                BestSplitter::criterion.init_threshold_values_histograms();
+                // Initialize class histograms for all outputs for using a threshold on samples with values
+                criterion.init_threshold_values_histograms();
             }
 
             // Loop: all thresholds
@@ -780,7 +922,7 @@ namespace koho {
             SamplesIdx_t   p=pNA, pn=pNA;
             // Loop: samples
             double         max_improvement = 0.0;
-            Features_t     max_threshold = std::numeric_limits<double>::quiet_NaN(); // no threshold
+            Features_t     max_threshold = numeric_limits<double>::quiet_NaN(); // no threshold
             SamplesIdx_t   max_pos = pNA;
             while (pn < n_samples) {
                 // If remaining f_X values are constant then stop
@@ -795,33 +937,33 @@ namespace koho {
                 // Not required, because "if (f_X[pn] + PRECISION >= f_X[n_samples-1]) break" above
                 // ensures that pn += 1 always points to valid data (pn < n_samples)
 
-                // Update class histograms for using a threshold on values
+                // Update class histograms for all outputs for using a threshold on values
                 // from current position p to the new position np (correspond to thresholds)
-                BestSplitter::criterion.update_threshold_histograms(y, s, pn);
+                criterion.update_threshold_histograms(y, s, pn);
 
-                // Calculate impurity of samples with values that are smaller and greater than a threshold
-                BestSplitter::criterion.calculate_threshold_impurity();
+                // Calculate impurity for all outputs of samples with values that are smaller and greater than a threshold
+                criterion.calculate_threshold_impurity();
 
-                // Calculate impurity improvement from the current node to its children
+                // Calculate impurity improvement over all outputs from the current node to its children
                 // assuming a split of the samples with values smaller and greater than a threshold
                 double  improvement_threshold = 0.0;
                 if (pNA == 0) { // node has samples with values only
                     improvement_threshold =
-                        BestSplitter::criterion.calculate_threshold_impurity_improvement();
+                        criterion.calculate_threshold_impurity_improvement();
                 } if (pNA > 0) { // node has samples with values and missing values
                     improvement_threshold =
-                        BestSplitter::criterion.calculate_threshold_values_impurity_improvement();
+                        criterion.calculate_threshold_values_impurity_improvement();
                 }
 
                 // Identify maximum impurity improvement
                 if (improvement_threshold > max_improvement) {
                     max_improvement = improvement_threshold;
                     max_threshold = (f_X[p] + f_X[pn]) / 2.0;
-                    max_pos = BestSplitter::start + pn;
+                    max_pos = start + pn;
                 }
 
                 // If impurity of right child is 0.0 (pure) then stop
-                if (BestSplitter::criterion.get_node_impurity_threshold_right() < PRECISION_EQUAL) break;
+                if (criterion.get_node_impurity_threshold_right() < PRECISION_EQUAL) break;
 
                 p = pn;
             }
@@ -838,14 +980,14 @@ namespace koho {
                 // Add missing values to split (based on threshold)
                 // ------------------------------------------------
 
-                // Calculate impurity of samples with values that are smaller and greater than a threshold
+                // Calculate impurity for all outputs of samples with values that are smaller and greater than a threshold
                 // combined with the samples with missing values
-                BestSplitter::criterion.calculate_threshold_NA_impurity();
-                // Calculate impurity improvement
+                criterion.calculate_threshold_NA_impurity();
+                // Calculate impurity improvement over all outputs
                 double  improvement_threshold_NA_left =
-                        BestSplitter::criterion.calculate_threshold_NA_left_impurity_improvement();
+                        criterion.calculate_threshold_NA_left_impurity_improvement();
                 double  improvement_threshold_NA_right =
-                        BestSplitter::criterion.calculate_threshold_NA_right_impurity_improvement();
+                        criterion.calculate_threshold_NA_right_impurity_improvement();
 
                 if (improvement_threshold_NA_left >= improvement_threshold_NA_right) {
                     // Add missing values to left child
@@ -888,7 +1030,7 @@ namespace koho {
                                                      double&                improvement) {
 
         NA = -1; // no missing values
-        threshold = std::numeric_limits<double>::quiet_NaN(); // no threshold
+        threshold = numeric_limits<double>::quiet_NaN(); // no threshold
         pos = 0;
         improvement = 0.0; // leaf node
 
@@ -899,10 +1041,10 @@ namespace koho {
         // Copy f_X=X[samples[start:end],f]
         // training data X for the current node.
 
-        SamplesIdx_t  n_samples = BestSplitter::end - BestSplitter::start;
+        SamplesIdx_t  n_samples = end - start;
         vector<Features_t>  f_X(n_samples);
         for (SamplesIdx_t i=0; i<n_samples; ++i) {
-            f_X[i] = X[s[i]*BestSplitter::n_features + feature];
+            f_X[i] = X[s[i]*n_features + feature];
         }
 
         // Detect samples with missing values and move them to the beginning of the samples vector
@@ -931,20 +1073,20 @@ namespace koho {
 
         if ((pNA > 0) && // missing values
             ((f_min + PRECISION_EQUAL > f_max) || // f_X is constant or
-             (BestSplitter::random_state.uniform_int(0, n_samples) < static_cast<long>((pNA-1))))) {
+             (random_state.uniform_int(0, n_samples) < static_cast<long>((pNA-1))))) {
             // random number proportional to the number of NA values determines if a split is done
 
-            // Calculate class histograms for the samples with missing values and the samples with values
-            BestSplitter::criterion.calculate_NA_histogram(y, s, pNA);
-            // Calculate impurity of samples with missing values and samples with values
-            BestSplitter::criterion.calculate_NA_impurity();
-            // Calculate impurity improvement from the current node to its children
+            // Calculate class histograms for all outputs for the samples with missing values and the samples with values
+            criterion.calculate_NA_histogram(y, s, pNA);
+            // Calculate impurity for all outputs of samples with missing values and samples with values
+            criterion.calculate_NA_impurity();
+            // Calculate impurity improvement over all outputs from the current node to its children
             // assuming a split between missing values and values
-            improvement = BestSplitter::criterion.calculate_NA_impurity_improvement();
+            improvement = criterion.calculate_NA_impurity_improvement();
             NA = 0; // pass all samples with missing values to the left child
             // pass all samples with values to the right child
-            threshold = std::numeric_limits<double>::quiet_NaN(); // no threshold
-            pos = BestSplitter::start + pNA;
+            threshold = numeric_limits<double>::quiet_NaN(); // no threshold
+            pos = start + pNA;
 
         // Split based on threshold
         // ------------------------
@@ -958,7 +1100,7 @@ namespace koho {
                 // using the Extreme Random Tree formulation
 
                 // Draw random threshold
-                threshold = BestSplitter::random_state.uniform_real(f_min + PRECISION_EQUAL, f_max);
+                threshold = random_state.uniform_real(f_min + PRECISION_EQUAL, f_max);
                 // excludes f_min, f_max, with uniform_real(low, high), low is inclusive and high is exclusive
 
                 // Partition s such that f_X[s[np-1]] <= threshold < f_X[s[np]]
@@ -974,19 +1116,19 @@ namespace koho {
 
                 if (pNA == 0) { // node has samples with values only
 
-                    // Initialize class histograms for using a threshold
-                    BestSplitter::criterion.init_threshold_histograms();
-                    // Update class histograms for the children
+                    // Initialize class histograms for all outputs for using a threshold
+                    criterion.init_threshold_histograms();
+                    // Update class histograms for all outputs for the children
                     // of the current node from position 0 to the position np
-                    BestSplitter::criterion.update_threshold_histograms(y, s, pn);
-                    // Calculate impurity of children
-                    BestSplitter::criterion.calculate_threshold_impurity();
-                    // Calculate impurity improvement
-                    double  improvement_threshold = BestSplitter::criterion.calculate_threshold_impurity_improvement();
+                    criterion.update_threshold_histograms(y, s, pn);
+                    // Calculate impurity for all outputs of children
+                    criterion.calculate_threshold_impurity();
+                    // Calculate impurity improvement over all outputs
+                    double  improvement_threshold = criterion.calculate_threshold_impurity_improvement();
 
                     improvement = improvement_threshold;
                     NA = -1; // no missing values
-                    pos = BestSplitter::start + pn;
+                    pos = start + pn;
 
                 } else if (pNA > 0) { // node has samples with values and missing values
 
@@ -994,26 +1136,26 @@ namespace koho {
                     // ------------------------------------------------
                     // impurity improvement determines how the split is done
 
-                    // Calculate class histograms for the samples with missing values and the samples with values
-                    BestSplitter::criterion.calculate_NA_histogram(y, s, pNA);
-                    // Initialize class histograms for using a threshold on samples with values
-                    BestSplitter::criterion.init_threshold_values_histograms();
-                    // Update class histograms for the children
+                    // Calculate class histograms for all outputs for the samples with missing values and the samples with values
+                    criterion.calculate_NA_histogram(y, s, pNA);
+                    // Initialize class histograms for all outputs for using a threshold on samples with values
+                    criterion.init_threshold_values_histograms();
+                    // Update class histograms for all outputs for the children
                     // of the current node from position 0 to the position np
-                    BestSplitter::criterion.update_threshold_histograms(y, s, pn);
-                    // Calculate impurity of children
-                    BestSplitter::criterion.calculate_threshold_impurity();
-                    // Calculate impurity improvements
+                    criterion.update_threshold_histograms(y, s, pn);
+                    // Calculate impurity for all outputs of children
+                    criterion.calculate_threshold_impurity();
+                    // Calculate impurity improvements over all outputs
                     double  improvement_threshold_NA_left =
-                            BestSplitter::criterion.calculate_threshold_NA_left_impurity_improvement();
+                            criterion.calculate_threshold_NA_left_impurity_improvement();
                     double  improvement_threshold_NA_right =
-                            BestSplitter::criterion.calculate_threshold_NA_right_impurity_improvement();
+                            criterion.calculate_threshold_NA_right_impurity_improvement();
 
                     if (improvement_threshold_NA_left >= improvement_threshold_NA_right) {
                         // Add missing values to left child
                         improvement = improvement_threshold_NA_left;
                         NA = 0; // missing values are passed on to the left child
-                        pos = BestSplitter::start + pn;
+                        pos = start + pn;
                     } else {
                         // Add missing values to right child
                         improvement = improvement_threshold_NA_right;
@@ -1023,12 +1165,11 @@ namespace koho {
                         vector<SamplesIdx_t> s_NA(&s[0], &s[pNA]); // temp for NAs
                         copy(&s[pNA], &s[n_samples], &s[0]);
                         copy(&s_NA[0], &s_NA[pNA], &s[n_samples - pNA]);
-                        pos = BestSplitter::start + pn - pNA;
+                        pos = start + pn - pNA;
                     }
                 }
             }
         }
-
     }
 
     // Find the best split and partition (actually sorted) samples.
@@ -1048,8 +1189,8 @@ namespace koho {
 
         // Copy s = samples[start:end]
         // LUT to the training data X, y for the current node.
-        vector<SamplesIdx_t> s(BestSplitter::end - BestSplitter::start);
-        copy(&BestSplitter::samples[BestSplitter::start], &BestSplitter::samples[BestSplitter::end], s.begin());
+        vector<SamplesIdx_t> s(end - start);
+        copy(&samples[start], &samples[end], s.begin());
 
         // Loop: k random features (k defined by max_features)
         // ---------------------------------------------------
@@ -1062,18 +1203,18 @@ namespace koho {
         // the modern version of the Fischer-Yates shuffle algorithm
         // in an iterative way.
 
-        vector<FeaturesIdx_t>  features(BestSplitter::n_features);
+        vector<FeaturesIdx_t>  features(n_features);
         iota(features.begin(), features.end(), 0); // identity mapping
 
         improvement = 0.0;
-        auto i = BestSplitter::n_features; // i=n instead of n-1 because of uniform_int(0,n)
-        while ((i > (BestSplitter::n_features - BestSplitter::max_features)) || // includes case 0
+        auto i = n_features; // i=n instead of n-1 because of uniform_int(0,n)
+        while ((i > (n_features - max_features)) || // includes case 0
                     (improvement < PRECISION_EQUAL && i > 0)) {
             // continue until at least one none constant feature was selected
             // or ultimately no more features are left
 
             unsigned long  j = 0;
-            if (i>1) j = static_cast<unsigned long>(BestSplitter::random_state.uniform_int(0, i)); // covers case 0
+            if (i>1) j = static_cast<unsigned long>(random_state.uniform_int(0, i)); // covers case 0
             // uniform_int(low, high), low is inclusive and high is exclusive
             --i; // adjust indexing by i
             swap(features[i],features[static_cast<FeaturesIdx_t>(j)]);
@@ -1085,10 +1226,10 @@ namespace koho {
             SamplesIdx_t  f_pos = 0;
             double        f_improvement = improvement;
 
-            if (BestSplitter::max_thresholds == 0) {
-                BestSplitter::split_feature(X, y, s, f, f_NA, f_threshold, f_pos, f_improvement);
-            } else if (BestSplitter::max_thresholds == 1) { // Extreme Random Tree
-                BestSplitter::split_feature_extreme_random(X, y, s, f, f_NA, f_threshold, f_pos, f_improvement);
+            if (max_thresholds == 0) {
+                split_feature(X, y, s, f, f_NA, f_threshold, f_pos, f_improvement);
+            } else if (max_thresholds == 1) { // Extreme Random Tree
+                split_feature_extreme_random(X, y, s, f, f_NA, f_threshold, f_pos, f_improvement);
             }
 
             // keeping sorted samples s from feature run
@@ -1099,10 +1240,9 @@ namespace koho {
                 threshold = f_threshold;
                 pos = f_pos; // position f_pos corresponds to s samples
                 // Replace samples[start:end] with properly ordered samples s
-                copy(s.begin(), s.end(), &BestSplitter::samples[BestSplitter::start]);
+                copy(s.begin(), s.end(), &samples[start]);
             }
         }
-
     }
 
 // =============================================================================
@@ -1111,24 +1251,29 @@ namespace koho {
 
     // Create and initialize a new depth first tree builder.
 
-    DepthFirstTreeBuilder::DepthFirstTreeBuilder(ClassesIdx_t     n_classes,
-                                                 FeaturesIdx_t    n_features,
-                                                 SamplesIdx_t     n_samples,
-                                                 ClassWeights_t*  class_weight,
-                                                 TreeDepthIdx_t   max_depth,
-                                                 FeaturesIdx_t    max_features,
-                                                 unsigned long    max_thresholds,
-                                                 string           missing_values,
-                                                 RandomState const& random_state)
-    : max_depth(max_depth), missing_values(std::move(missing_values)),
-      // Create and initialize a new best splitter (and gini criterion)
-      splitter(n_classes,
-               n_features,
-               n_samples,
-               class_weight,
-               max_features,
-               max_thresholds,
-               random_state) { }
+    DepthFirstTreeBuilder::DepthFirstTreeBuilder(OutputsIdx_t           n_outputs,
+                                                 ClassesIdx_t*          n_classes,
+                                                 ClassesIdx_t           n_classes_max,
+                                                 FeaturesIdx_t          n_features,
+                                                 SamplesIdx_t           n_samples,
+                                                 ClassWeights_t*        class_weight,
+                                                 TreeDepthIdx_t         max_depth,
+                                                 FeaturesIdx_t          max_features,
+                                                 unsigned long          max_thresholds,
+                                                 string                 missing_values,
+                                                 RandomState const&     random_state)
+    :   max_depth(max_depth),
+        missing_values(move(missing_values)),
+        // Create and initialize a new best splitter (and gini criterion)
+        splitter(n_outputs,
+                 n_classes,
+                 n_classes_max,
+                 n_features,
+                 n_samples,
+                 class_weight,
+                 max_features,
+                 max_thresholds,
+                 random_state) {  }
 
     // Build a binary decision tree from the training data.
 
@@ -1137,80 +1282,80 @@ namespace koho {
                                        Classes_t*    y,
                                        SamplesIdx_t  n_samples) {
 
-        // Create an empty node information stack
-        struct NodeInfo {
+               // Create an empty node information stack
+               struct NodeInfo {
 
-            SamplesIdx_t    start;
-            SamplesIdx_t    end;
-            TreeDepthIdx_t  depth;
-            NodesIdx_t      parent_id;
-            bool            is_left;
+                   SamplesIdx_t    start;
+                   SamplesIdx_t    end;
+                   TreeDepthIdx_t  depth;
+                   NodesIdx_t      parent_id;
+                   bool            is_left;
 
-            NodeInfo(SamplesIdx_t    start,
-                     SamplesIdx_t    end,
-                     TreeDepthIdx_t  depth,
-                     NodesIdx_t      parent_id,
-                     bool            is_left)
-            : start(start),
-              end(end),
-              depth(depth),
-              parent_id(parent_id),
-              is_left(is_left) { };
-        };
-        stack<NodeInfo>  node_info_stack;
+                   NodeInfo(SamplesIdx_t    start,
+                            SamplesIdx_t    end,
+                            TreeDepthIdx_t  depth,
+                            NodesIdx_t      parent_id,
+                            bool            is_left)
+                   : start(start),
+                     end(end),
+                     depth(depth),
+                     parent_id(parent_id),
+                     is_left(is_left) { };
+               };
+               stack<NodeInfo>  node_info_stack;
 
-        tree.nodes.reserve((1u << (DepthFirstTreeBuilder::max_depth+1))-1);
+               tree.nodes.reserve((1u << (max_depth+1))-1);
 
-        // Push root node information onto the stack
-        node_info_stack.emplace(NodeInfo(0, n_samples, 0, 0, false));
-        // Loop: nodes
-        while (!node_info_stack.empty()) {
-            // Pop current node information from the stack
-            NodeInfo  cn = node_info_stack.top();
-            node_info_stack.pop();
+               // Push root node information onto the stack
+               node_info_stack.emplace(NodeInfo(0, n_samples, 0, 0, false));
+               // Loop: nodes
+               while (!node_info_stack.empty()) {
+                   // Pop current node information from the stack
+                   NodeInfo  cn = node_info_stack.top();
+                   node_info_stack.pop();
 
-            // Calculate number of samples per class histogram
-            // and impurity for the current node
-            splitter.init_node(y, cn.start, cn.end);
-            vector<Histogram_t>  histogram = DepthFirstTreeBuilder::splitter.criterion.get_node_weighted_histogram();
-            double  impurity = DepthFirstTreeBuilder::splitter.criterion.get_node_impurity();
-            SamplesIdx_t  pos = 0;
+                   // Calculate number of samples per class histogram for all outputs
+                   // and impurity for the current node
+                   splitter.init_node(y, cn.start, cn.end);
+                   vector<vector<Histogram_t>>  histogram =
+                           splitter.criterion.get_node_weighted_histogram();
+                   double  impurity = splitter.criterion.get_node_impurity();
+                   SamplesIdx_t  pos = 0;
 
-            // If a stop criterion is met node becomes a leaf node
-            bool  is_leaf = (cn.depth >= DepthFirstTreeBuilder::max_depth) ||
-                            (impurity <= PRECISION_EQUAL);
+                   // If a stop criterion is met node becomes a leaf node
+                   bool  is_leaf = (cn.depth >= max_depth) ||
+                                   (impurity <= PRECISION_EQUAL);
 
-            // Split node (if node is not a leaf node)
-            FeaturesIdx_t  feature = 0;
-            int            NA = -1; // NA
-            Features_t     threshold = std::numeric_limits<double>::quiet_NaN(); // no threshold
-            double         improvement = 0.0;
-            if (!is_leaf) {
-                // Find the split on samples[start:end] that maximizes impurity improvement and
-                // partition samples[start:end] into samples[start:pos] and samples[pos:end]
-                // according to the split
-                DepthFirstTreeBuilder::splitter.split_node(X, y, feature, NA, threshold, pos, improvement);
-                // If no impurity improvement (no split found) then node is a leaf node
-                if (improvement <= PRECISION_EQUAL) is_leaf = true;
-            }
+                   // Split node (if node is not a leaf node)
+                   FeaturesIdx_t  feature = 0;
+                   int            NA = -1; // NA
+                   Features_t     threshold = numeric_limits<double>::quiet_NaN(); // no threshold
+                   double         improvement = 0.0;
+                   if (!is_leaf) {
+                       // Find the split on samples[start:end] that maximizes impurity improvement and
+                       // partition samples[start:end] into samples[start:pos] and samples[pos:end]
+                       // according to the split
+                       splitter.split_node(X, y, feature, NA, threshold, pos, improvement);
+                       // If no impurity improvement (no split found) then node is a leaf node
+                       if (improvement <= PRECISION_EQUAL) is_leaf = true;
+                   }
 
-            // Add node to the decision tree
-            NodesIdx_t node_id = tree.add_node(cn.depth, cn.parent_id, cn.is_left,
-                                               feature, NA, threshold,
-                                               histogram, impurity, improvement);
+                   // Add node to the decision tree
+                   NodesIdx_t node_id = tree.add_node(cn.depth, cn.parent_id, cn.is_left,
+                                                      feature, NA, threshold,
+                                                      histogram, impurity, improvement);
 
-            // Split node (if not a leaf node)
-            if (!is_leaf) {
-                // Push right child node information onto the stack
-                node_info_stack.emplace(NodeInfo(pos, cn.end, cn.depth+1, node_id, false));
-                // Push left child node information onto the stack
-                // LIFO: left depth first order
-                node_info_stack.emplace(NodeInfo(cn.start, pos, cn.depth+1, node_id, true));
-            }
-        }
+                   // Split node (if not a leaf node)
+                   if (!is_leaf) {
+                       // Push right child node information onto the stack
+                       node_info_stack.emplace(NodeInfo(pos, cn.end, cn.depth+1, node_id, false));
+                       // Push left child node information onto the stack
+                       // LIFO: left depth first order
+                       node_info_stack.emplace(NodeInfo(cn.start, pos, cn.depth+1, node_id, true));
+                   }
+               }
 
-        tree.nodes.shrink_to_fit();
-
+               tree.nodes.shrink_to_fit();
     }
 
 // =============================================================================
@@ -1219,23 +1364,33 @@ namespace koho {
 
     // Create and initialize a new decision tree classifier.
 
-    DecisionTreeClassifier::DecisionTreeClassifier(vector<std::string>  classes,
-                                                   ClassesIdx_t         n_classes,
-                                                   vector<std::string>  features,
-                                                   FeaturesIdx_t        n_features,
-                                                   string const&        class_balance,
-                                                   TreeDepthIdx_t       max_depth,
-                                                   FeaturesIdx_t        max_features,
-                                                   unsigned long        max_thresholds,
-                                                   string const&        missing_values,
-                                                   long                 random_state_seed)
-    : tree_(static_cast<ClassesIdx_t>(n_classes),
-            static_cast<FeaturesIdx_t>(n_features)) {
+    auto calculate_n_classes = [](const vector<vector<string>>& classes) {
+        vector<ClassesIdx_t> n_classes(classes.size(), 0);
+        for (OutputsIdx_t o=0; o<classes.size(); o++) {
+            n_classes[o] = classes[o].size();
+        }
+        return n_classes;
+    };
 
-        DecisionTreeClassifier::classes = std::move(classes);
-        DecisionTreeClassifier::n_classes = n_classes;
-        DecisionTreeClassifier::features = std::move(features);
-        DecisionTreeClassifier::n_features = n_features;
+    DecisionTreeClassifier::DecisionTreeClassifier(vector<vector<string>> const&   classes,
+                                                   vector<string> const&           features,
+                                                   string const&                   class_balance,
+                                                   TreeDepthIdx_t                  max_depth,
+                                                   FeaturesIdx_t                   max_features,
+                                                   unsigned long                   max_thresholds,
+                                                   string const&                   missing_values,
+                                                   long                            random_state_seed)
+            :   n_outputs(classes.size()),
+                classes(classes),
+                n_classes(calculate_n_classes(classes)),
+                features(features),
+                n_features(features.size()),
+                tree_(n_outputs, n_classes, n_features) {
+
+        // for convenience
+
+        DecisionTreeClassifier::n_classes_max = *max_element(begin(DecisionTreeClassifier::n_classes),
+                                                             end(DecisionTreeClassifier::n_classes));
 
         // Check hyperparameters
 
@@ -1265,7 +1420,7 @@ namespace koho {
             DecisionTreeClassifier::max_thresholds = 0; // default
 
         // missing values
-        if (missing_values == "MCAR" || missing_values == "NMAR" || missing_values == "None")
+        if ( missing_values == "NMAR" || missing_values == "None")
             DecisionTreeClassifier::missing_values = missing_values;
         else
             DecisionTreeClassifier::missing_values = "None"; // default
@@ -1281,39 +1436,64 @@ namespace koho {
 
     // Build a decision tree classifier from the training data.
 
-    void DecisionTreeClassifier::fit(Features_t*   X,
-                                     Classes_t*    y,
-                                     SamplesIdx_t  n_samples) {
+    void DecisionTreeClassifier::fit(vector<Features_t>&   X,
+                                     vector<Classes_t>&    y) {
 
-        // Calculate class weights
+        // number of samples
+        SamplesIdx_t    n_samples = y.size() / n_outputs;
+        if (n_samples != X.size() / n_features) {
+            throw runtime_error("Mismatch: n_outputs, n_features and n_samples.");
+        }
+
+        // check that training data includes all classes across all outputs
+        for (unsigned long o=0; o<n_outputs; ++o) {
+            set<long> classesSet;
+            for (unsigned long c = 0; c < n_classes[o]; ++c) { classesSet.insert(c); }
+            for (unsigned long i = 0; i < n_samples; ++i) {
+                classesSet.erase(y[i * n_outputs + o]);
+                if (classesSet.empty()) continue;
+            }
+            if (!classesSet.empty()) {
+                throw runtime_error("Training data does not include all classes.");
+            }
+        }
+
+        // Calculate class weights for each output separately
         // so that n_samples == sum of all weighted samples
 
-        std::vector<double>  class_weight(n_samples, 1.0);
-        if (DecisionTreeClassifier::class_balance == "balanced") {
-            std::vector<long>  bincount(n_classes, 0);
-            for (unsigned long i=0; i<n_samples; ++i) {
-                bincount[y[i]]++;
-            }
-            for (unsigned long i=0; i<n_classes; ++i) {
-                class_weight[i] = (static_cast<double>(n_samples) / bincount[i]) / DecisionTreeClassifier::n_classes;
+        // we use n_classes_max to create a nice 2D array to hold the class weights
+        // as the number of classes can be different for different outputs
+        vector<double>  class_weight(n_outputs * n_classes_max, 1.0);
+        if (class_balance == "balanced") {
+            for (unsigned long o=0; o<n_outputs; ++o) { // process each output independently
+                vector<long> bincount(n_classes[o], 0);
+                for (unsigned long i = 0; i < n_samples; ++i) {
+                    bincount[y[i*n_outputs+o]]++;
+                }
+                for (unsigned long c = 0; c < n_classes[o]; ++c) {
+                    class_weight[o*n_classes_max + c] =
+                            (static_cast<double>(n_samples) / bincount[c]) / n_classes[o];
+                }
             }
         }
 
         //  Build decision tree
 
-        DepthFirstTreeBuilder builder(DecisionTreeClassifier::n_classes,
-                                      DecisionTreeClassifier::n_features,
+        DepthFirstTreeBuilder builder(n_outputs,
+                                      &n_classes[0],
+                                      n_classes_max,
+                                      n_features,
                                       n_samples,
                                       &class_weight[0],
-                                      DecisionTreeClassifier::max_depth,
-                                      DecisionTreeClassifier::max_features,
-                                      DecisionTreeClassifier::max_thresholds,
-                                      DecisionTreeClassifier::missing_values,
-                                      DecisionTreeClassifier::random_state);
+                                      max_depth,
+                                      max_features,
+                                      max_thresholds,
+                                      missing_values,
+                                      random_state);
 
-        builder.build(DecisionTreeClassifier::tree_, X, y, n_samples);
+        builder.build(tree_, &X[0], &y[0], n_samples);
 
-    };
+    }
 
     // Predict classes probabilities for the test data.
 
@@ -1321,7 +1501,7 @@ namespace koho {
                                                 SamplesIdx_t  n_samples,
                                                 double*       y_prob) {
 
-        DecisionTreeClassifier::tree_.predict(X, n_samples, y_prob);
+        tree_.predict(X, n_samples, y_prob);
 
     }
 
@@ -1331,13 +1511,21 @@ namespace koho {
                                           SamplesIdx_t  n_samples,
                                           Classes_t*    y) {
 
-        std::vector<double>  y_prob(n_samples*DecisionTreeClassifier::n_classes, 0.0);
-        DecisionTreeClassifier::predict_proba(X, n_samples, &y_prob[0]);
+        // We use n_classes_max to create a nice 3D array to hold the predicted values x samples x classes
+        // as the number of classes can be different for different outputs
+
+        vector<double>  y_prob(n_samples * n_outputs * n_classes_max, 0.0);
+        predict_proba(X, n_samples, &y_prob[0]);
+
 
         for (SamplesIdx_t i=0; i<n_samples; ++i) {
-            y[i] = maxIndex(&y_prob[i*DecisionTreeClassifier::n_classes], DecisionTreeClassifier::n_classes);
+            for (OutputsIdx_t o=0; o<n_outputs; ++o) {
+                y[i*n_outputs + o] =
+                        maxIndex(&y_prob[i * n_outputs * n_classes_max +
+                                         o * n_classes_max],
+                                 n_classes[o]);
+            }
         }
-
     }
 
     // Calculate score for the test data.
@@ -1346,14 +1534,18 @@ namespace koho {
                                          Classes_t*    y,
                                          SamplesIdx_t  n_samples) {
 
-        std::vector<long>    y_predict(n_samples, 0);
-        DecisionTreeClassifier::predict(X, n_samples, &y_predict[0]);
+        vector<long>    y_predict(n_samples*n_outputs, 0);
+        predict(X, n_samples, &y_predict[0]);
 
         unsigned long n_true = 0;
-        for (unsigned long i = 0; i < n_samples; ++i) {
-            if (y_predict[i] == y[i]) n_true++;
+        for (SamplesIdx_t i = 0; i < n_samples; ++i) {
+            for (OutputsIdx_t o = 0; o < n_outputs; ++o) {
+                if (y_predict[i*n_outputs + o] ==
+                    y[i*n_outputs + o])
+                    n_true++;
+            }
         }
-        return static_cast<double>(n_true) / n_samples;
+        return static_cast<double>(n_true) / (n_samples*n_outputs);
 
     }
 
@@ -1361,7 +1553,7 @@ namespace koho {
 
     void  DecisionTreeClassifier::calculate_feature_importances(double*  importances) {
 
-        DecisionTreeClassifier::tree_.calculate_feature_importances(importances);
+        tree_.calculate_feature_importances(importances);
 
     }
 
@@ -1439,39 +1631,55 @@ namespace koho {
 
     // Process tree recursively node by node and provide GraphViz dot format for node.
 
-    void  process_tree_recursively_graphviz(const Tree&                 tree,
-                                            NodesIdx_t                  node_id,
-                                            const vector<vector<int>>&  rgb_LUT,
-                                            const vector<string>&       classes,
-                                            const vector<string>&       features,
-                                            bool                        rotate,
-                                            ofstream&                   fout) {
+    void  process_tree_recursively_graphviz(const Tree&                     tree,
+                                            NodesIdx_t                      node_id,
+                                            const vector<vector<int>>&      rgb_LUT,
+                                            const vector<vector<string>>&   classes,
+                                            const vector<string>&           features,
+                                            bool                            rotate,
+                                            ofstream&                       fout) {
 
         // Current node
-        NodesIdx_t           left_child = tree.nodes[node_id].left_child;
-        NodesIdx_t           right_child = tree.nodes[node_id].right_child;
-        FeaturesIdx_t        feature = tree.nodes[node_id].feature;
-        int                  NA = tree.nodes[node_id].NA;
-        Features_t           threshold = tree.nodes[node_id].threshold;
-        vector<Histogram_t>  histogram = tree.nodes[node_id].histogram;
-        double               impurity = tree.nodes[node_id].impurity;
+        NodesIdx_t                      left_child = tree.nodes[node_id].left_child;
+        NodesIdx_t                      right_child = tree.nodes[node_id].right_child;
+        FeaturesIdx_t                   feature = tree.nodes[node_id].feature;
+        int                             NA = tree.nodes[node_id].NA;
+        Features_t                      threshold = tree.nodes[node_id].threshold;
+        vector<vector<Histogram_t>>     histogram = tree.nodes[node_id].histogram;
+        double                          impurity = tree.nodes[node_id].impurity;
 
-        // Prediction
-        ClassesIdx_t  c = maxIndex(&histogram[0],histogram.size());
-        stringstream  p_c;
-        Histogram_t   n = accumulate(histogram.begin(), histogram.end(), 0.0);
-        p_c << "[" << setprecision(2) << setw(2) << (histogram[0] / n);
-        for (ClassesIdx_t cc=1; cc<histogram.size(); ++cc) {
-            p_c << "," << setw(2) << (histogram[cc] / n);
+        // Predictions
+        vector<ClassesIdx_t>  c(tree.n_outputs, 0);
+        for (unsigned long o=0; o<tree.n_outputs; ++o) {
+            c[o] = maxIndex(&histogram[o][0], tree.n_classes[o]);
         }
-        p_c << "]";
+
+        // Histograms
+        stringstream  p_c;
+        Histogram_t   n = accumulate(histogram[0].begin(), histogram[0].end(), 0.0); // use histogram from 1st output, all the same
+        for (unsigned long o=0; o<tree.n_outputs; ++o) {
+            p_c << "[" << setprecision(2) << setw(2) << (histogram[o][0] / n);
+            for (ClassesIdx_t cc = 1; cc < tree.n_classes[o]; ++cc) {
+                p_c << "," << setw(2) << (histogram[o][cc] / n);
+            }
+            p_c << "]";
+            if (o < tree.n_outputs-1) { p_c << "\\n"; }
+        }
 
         // Node color and intensity based on classification and impurity
-        int  r = rgb_LUT[c][0];
-        int  g = rgb_LUT[c][1];
-        int  b = rgb_LUT[c][2];
-        double  max_impurity = 1.0 - (1.0 / tree.n_classes);
-        int     alpha = static_cast<int>(255 * (max_impurity - impurity) / max_impurity);
+        unsigned long classes_combination = c[0];
+        for (unsigned long o=1; o<tree.n_outputs; ++o) {
+            classes_combination += tree.n_classes[o-1]*c[o];
+        }
+        int  r = rgb_LUT[classes_combination][0];
+        int  g = rgb_LUT[classes_combination][1];
+        int  b = rgb_LUT[classes_combination][2];
+        vector<double>  max_impurity(tree.n_outputs, 0.0);
+        for (unsigned long o=0; o<tree.n_outputs; ++o) {
+            max_impurity[o] = 1.0 - (1.0 / tree.n_classes[o]);
+        }
+        double  max_impurity_avrg = accumulate(max_impurity.begin(), max_impurity.end(), 0.0) / tree.n_outputs;
+        int     alpha = static_cast<int>(255 * (max_impurity_avrg - impurity) / max_impurity_avrg);
         stringstream  color; // #RRGGBBAA hex format
         color << '#' << hex << setw(2) << setfill('0') << r << setw(2) << g << setw(2) << b << setw(2) << alpha << dec;
 
@@ -1484,8 +1692,12 @@ namespace koho {
             stringstream  node;
             node << node_id
                  << " [label=\""
-                 << p_c.str() << "\\n" << classes[c] << "\""
-                 << ", fillcolor=\"" << color.str() << "\"] ;"
+                 << p_c.str() << "\\n";
+            for (unsigned long o=0; o<tree.n_outputs; ++o) {
+                node << classes[o][c[o]];
+                if (o < tree.n_outputs-1) { node << " "; }
+            }
+            node << "\"" << ", fillcolor=\"" << color.str() << "\"] ;"
                  << endl;
             fout << node.str();
 
@@ -1501,13 +1713,14 @@ namespace koho {
 
             bool  change = false;
             if (order) {
+                // Order children based on prediction from first output
                 // Left Child Prediction
-                vector<Histogram_t> lc_histogram = tree.nodes[left_child].histogram;
+                vector<Histogram_t> lc_histogram = tree.nodes[left_child].histogram[0];
                 ClassesIdx_t        lc_c = maxIndex(&lc_histogram[0], lc_histogram.size());
                 Histogram_t         lc_n = accumulate(lc_histogram.begin(), lc_histogram.end(), 0.0);
                 double              lc_p_c = lc_histogram[lc_c] / lc_n;
                 // Right Child Prediction
-                vector<Histogram_t> rc_histogram = tree.nodes[right_child].histogram;
+                vector<Histogram_t> rc_histogram = tree.nodes[right_child].histogram[0];
                 ClassesIdx_t        rc_c = maxIndex(&rc_histogram[0], rc_histogram.size());
                 Histogram_t         rc_n = accumulate(rc_histogram.begin(), rc_histogram.end(), 0.0);
                 double              rc_p_c = rc_histogram[rc_c] / rc_n;
@@ -1534,9 +1747,9 @@ namespace koho {
             }
 
             // Edge width based on (weighted) number of samples used for training
-            vector<Histogram_t>  root_histogram = tree.nodes[0].histogram;
-            vector<Histogram_t>  left_child_histogram = tree.nodes[left_child].histogram;
-            vector<Histogram_t>  right_child_histogram = tree.nodes[right_child].histogram;
+            vector<Histogram_t>  root_histogram = tree.nodes[0].histogram[0]; // use histogram from 1st output, all the same
+            vector<Histogram_t>  left_child_histogram = tree.nodes[left_child].histogram[0];
+            vector<Histogram_t>  right_child_histogram = tree.nodes[right_child].histogram[0];
             // total number of samples used for training
             Histogram_t   n_root = accumulate(root_histogram.begin(), root_histogram.end(), 0.0);
             Histogram_t   n_left_child = accumulate(left_child_histogram.begin(), left_child_histogram.end(), 0.0)
@@ -1605,8 +1818,8 @@ namespace koho {
 
     /// Export of a decision tree in GraphViz dot format.
 
-    void  DecisionTreeClassifier::export_graphviz(std::string const& filename,
-                                                  bool               rotate) {
+    void  DecisionTreeClassifier::export_graphviz(string const& filename,
+                                                  bool          rotate) {
 
         string fn = filename + ".gv";
 
@@ -1620,8 +1833,12 @@ namespace koho {
             // Rotate (default: top-down)
             if (rotate) fout << "rankdir=LR ;" << endl; // left-right orientation
 
-            // Define rgb colors for the different classes
-            vector<vector<int>>  rgb_LUT = create_rgb_LUT(n_classes);
+            // Define rgb colors for the different classes over all outputs
+            unsigned long n_classes_combinations = 1;
+            for (unsigned long o=0; o<tree_.n_outputs; ++o) {
+                n_classes_combinations *= tree_.n_classes[o];
+            }
+            vector<vector<int>>  rgb_LUT = create_rgb_LUT(n_classes_combinations);
 
             // Process the tree recursively
             process_tree_recursively_graphviz(tree_, 0, rgb_LUT, classes, features, rotate, fout);  // root node = 0
@@ -1630,7 +1847,6 @@ namespace koho {
 
             fout.close();
         }
-
     }
 
     // Process tree recursively node by node and provide GraphViz dot format for node.
@@ -1640,20 +1856,22 @@ namespace koho {
                                         ostringstream&              sout) {
 
         // Current node
-        NodesIdx_t           left_child = tree.nodes[node_id].left_child;
-        NodesIdx_t           right_child = tree.nodes[node_id].right_child;
-        FeaturesIdx_t        feature = tree.nodes[node_id].feature;
-        int                  NA = tree.nodes[node_id].NA;
-        Features_t           threshold = tree.nodes[node_id].threshold;
-        vector<Histogram_t>  histogram = tree.nodes[node_id].histogram;
+        NodesIdx_t                      left_child = tree.nodes[node_id].left_child;
+        NodesIdx_t                      right_child = tree.nodes[node_id].right_child;
+        FeaturesIdx_t                   feature = tree.nodes[node_id].feature;
+        int                             NA = tree.nodes[node_id].NA;
+        Features_t                      threshold = tree.nodes[node_id].threshold;
+        vector<vector<Histogram_t>>     histogram = tree.nodes[node_id].histogram;
 
         // Histogram formatting as string
         stringstream         histogram_string;
-        histogram_string << "[" << histogram[0];
-        for (ClassesIdx_t c=1; c<histogram.size(); ++c) {
-            histogram_string << ", " << histogram[c];
+        for (unsigned long o=0; o<tree.n_outputs; ++o) {
+            histogram_string << "[" << histogram[o][0];
+            for (ClassesIdx_t c = 1; c < tree.n_classes[o]; ++c) {
+                histogram_string << ", " << histogram[o][c];
+            }
+            histogram_string << "]";
         }
-        histogram_string << "]";
 
         // Leaf node
         if (left_child == 0) {
@@ -1698,12 +1916,19 @@ namespace koho {
 
     void  DecisionTreeClassifier::serialize(ofstream& fout) {
 
+        // Number of Outputs
+        fout.write((const char*)(&n_outputs), sizeof(n_outputs));
+
         // Classes
-        fout.write((const char*)(&n_classes), sizeof(n_classes));
-        for (unsigned long c=0; c<n_classes; ++c) {
-            unsigned long  size = classes[c].size();
-            fout.write((const char*)&size, sizeof(size));
-            fout.write((const char*)&classes[c][0], size);
+        for (OutputsIdx_t o=0; o<n_outputs; ++o) {
+            fout.write((const char *) (&n_classes[o]), sizeof(n_classes[o]));
+        }
+        for (OutputsIdx_t o=0; o<n_outputs; ++o) {
+            for (unsigned long c=0; c<n_classes[o]; ++c) {
+                unsigned long size = classes[o][c].size();
+                fout.write((const char *) &size, sizeof(size));
+                fout.write((const char *) &classes[o][c][0], size);
+            }
         }
 
         // Features
@@ -1736,14 +1961,14 @@ namespace koho {
 
     // Export of a decision tree classifier in binary serialized format.
 
-    void  DecisionTreeClassifier::export_serialize(std::string const& filename) {
+    void  DecisionTreeClassifier::export_serialize(string const& filename) {
 
         string fn = filename + ".dtc";
 
         ofstream  fout(fn, ios_base::binary);
         if (fout.is_open()) {
 
-            const int  version = 1; // file version number
+            const int  version = 2; // file version number
             fout.write((const char*)&version, sizeof(version));
 
             // Serialize Decision Tree Classifier
@@ -1760,17 +1985,29 @@ namespace koho {
 
     DecisionTreeClassifier  DecisionTreeClassifier::deserialize(ifstream& fin) {
 
+        // Number of Outputs
+        OutputsIdx_t                n_outputs;
+        fin.read((char*)(&n_outputs), sizeof(n_outputs));
+
         // Classes
-        ClassesIdx_t    n_classes;
-        vector<string>  classes;
-        fin.read((char*)(&n_classes), sizeof(n_classes));
-        for (unsigned long c=0; c<n_classes; ++c) {
-            string str;
-            unsigned long  size;
-            fin.read((char*)(&size), sizeof(size));
-            str.resize(size);
-            fin.read((char*)(&str[0]), size);
-            classes.emplace_back(str);
+        vector<ClassesIdx_t>        n_classes;
+        for (OutputsIdx_t o=0; o<n_outputs; ++o) {
+            ClassesIdx_t o_n_classes;
+            fin.read((char *) (&o_n_classes), sizeof(o_n_classes));
+            n_classes.emplace_back(o_n_classes);
+        }
+        vector<vector<string>>      classes;
+        for (OutputsIdx_t o=0; o<n_outputs; ++o) {
+            vector<string>          o_classes;
+            for (unsigned long c=0; c<n_classes[o]; ++c) {
+                string str;
+                unsigned long  size;
+                fin.read((char*)(&size), sizeof(size));
+                str.resize(size);
+                fin.read((char*)(&str[0]), size);
+                o_classes.emplace_back(str);
+            }
+            classes.emplace_back(o_classes);
         }
 
         // Features
@@ -1806,8 +2043,7 @@ namespace koho {
         // Random Number Generator
         long    random_state_seed = 0;
 
-        DecisionTreeClassifier  dtc(classes, n_classes,
-                                    features, n_features,
+        DecisionTreeClassifier  dtc(classes, features,
                                     class_balance, max_depth,
                                     max_features, max_thresholds,
                                     missing_values,
@@ -1825,7 +2061,7 @@ namespace koho {
 
     // Import of a decision tree classifier in binary serialized format.
 
-    DecisionTreeClassifier  DecisionTreeClassifier::import_deserialize(std::string const& filename) {
+    DecisionTreeClassifier  DecisionTreeClassifier::import_deserialize(string const& filename) {
 
         string fn = filename + ".dtc";
 
@@ -1835,10 +2071,10 @@ namespace koho {
             int  version;
             fin.read((char*)(&version), sizeof(version));
 
-            if (version == 1) { // file version number
+            if (version == 2) { // file version number
 
                 // Deserialize Decision Tree Classifier
-                DecisionTreeClassifier  dtc = DecisionTreeClassifier::deserialize(fin);
+                DecisionTreeClassifier dtc = deserialize(fin);
 
                 fin.close();
 

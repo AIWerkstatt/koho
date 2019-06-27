@@ -21,17 +21,35 @@ We are trying to be consistent with scikit-learn's `decision tree`_ and `ensembl
 
 **Exceptions**
 
-Used ``class_balance`` as hyperparameter name instead of ``class_weight``
+Used ``class_balance`` as hyperparameter name instead of ``class_weight``.
 
     The class_weight hyperparameter name is recognized by check_estimator()
     and the test check_class_weight_classifiers() is performed
     that uses the dict parameter and requires for a decision tree
     the “min_weight_fraction_leaf” hyperparameter to be implemented to pass the test.
 
+Only ``class_weights`` (not ``sample_weights``) are used and
+for multi-output (single model), ``class_weights`` are calculated and treated separately for each output.
+
+    Scikit-learn's compute_class_weight() and compute_sample_weight() functions
+    multiply the ``sample_weights`` for multi-output together to a single sample_weight.
+
+Overwritten score() function instead of using inherited score() function from metrics module.
+
+    Scikit-learn's metrics module does not support "multiclass-multioutput" format.
+
 .. _`decision tree`: https://scikit-learn.org/stable/modules/tree.html
 .. _`ensemble`: https://scikit-learn.org/stable/modules/ensemble.html
 
 We provide and use the same Random Number Generator from our C++ implementation in Python.
+
+Cython (Python bindings for C++ library)
+========================================
+
+To allow all data to be passed by reference (not copied) between Python and C++,
+multi-dimensional arrays, like X, y and class_weights, in Python
+are handled as one-dimensional arrays in C++.
+The down-side is that this is not a very elegant programming style for our C++ library.
 
 Basic Concepts
 ==============

@@ -1,4 +1,6 @@
 # encoding=utf-8
+#!python
+#cython: language_level=3
 """ Cython binding for C++ implementation.
 """
 
@@ -11,18 +13,17 @@ from cython.operator cimport dereference as deref
 from libcpp.memory cimport unique_ptr
 from libcpp.vector cimport vector
 from libcpp.string cimport string
-from libcpp cimport bool
 
 # C++ class interface
 
 cdef extern from "../cpp/random_number_generator.h" namespace "koho" nogil:
 
-    cdef cppclass CppRandomState "koho::RandomState":
-        void                CppRandomState() except +
-        void                CppRandomState(unsigned long seed) except +
-        double              uniform_real(double low, double high)
-        long                uniform_int(long low, long high)
-        long                MAX_INT
+    cdef cppclass   CppRandomState "koho::RandomState":
+        void        CppRandomState() except +
+        void        CppRandomState(unsigned long seed) except +
+        double      uniform_real(double low, double high)
+        long        uniform_int(long low, long high)
+        long        MAX_INT
 
 cdef extern from "../cpp/decision_tree.h" namespace "koho" nogil:
 
@@ -35,48 +36,54 @@ cdef extern from "../cpp/decision_tree.h" namespace "koho" nogil:
     ctypedef unsigned long  SamplesIdx_t
     ctypedef unsigned long  FeaturesIdx_t
     ctypedef unsigned long  ClassesIdx_t
+    ctypedef unsigned long  OutputsIdx_t
     ctypedef unsigned long  NodesIdx_t
     ctypedef unsigned long  TreeDepthIdx_t
 
     cdef cppclass CppNode "koho::Node":
 
-        NodesIdx_t          left_child
-        NodesIdx_t          right_child
-        FeaturesIdx_t       feature
-        int                 NA
-        Features_t          threshold
-        vector[Histogram_t] histogram
-        double              impurity
-        double              improvement
+        NodesIdx_t                  left_child
+        NodesIdx_t                  right_child
+        FeaturesIdx_t               feature
+        int                         NA
+        Features_t                  threshold
+        vector[vector[Histogram_t]] histogram
+        double                      impurity
+        double                      improvement
 
-        void                CppNode(NodesIdx_t left_child, NodesIdx_t right_child,
-                                    FeaturesIdx_t feature, int NA, Features_t threshold,
-                                    const vector[Histogram_t]& histogram,
-                                    double impurity, double improvement) except +
+        void    CppNode(NodesIdx_t left_child, NodesIdx_t right_child,
+                        FeaturesIdx_t feature, int NA, Features_t threshold,
+                        const vector[vector[Histogram_t]]& histogram,
+                        double impurity, double improvement) except +
 
     cdef cppclass CppTree "koho::Tree":
 
-        ClassesIdx_t        n_classes
-        FeaturesIdx_t       n_features
-        TreeDepthIdx_t      max_depth
-        NodesIdx_t          node_count
-        vector[CppNode]     nodes
+        OutputsIdx_t            n_outputs
+        vector[ClassesIdx_t]    n_classes
+        ClassesIdx_t            n_classes_max
+        FeaturesIdx_t           n_features
+        TreeDepthIdx_t          max_depth
+        NodesIdx_t              node_count
+        vector[CppNode]         nodes
 
-        void                CppTree(ClassesIdx_t n_classes, FeaturesIdx_t n_features) except +
-        void                predict(double* X, unsigned long n_samples, double* y_prob)
-        void                calculate_feature_importances(double* importances)
+        void    CppTree(OutputsIdx_t n_outputs, ClassesIdx_t* n_classes, FeaturesIdx_t n_features) except +
+        void    CppTree() except +
+        void    predict(double* X, unsigned long n_samples, double* y_prob)
+        void    calculate_feature_importances(double* importances)
 
     cdef cppclass CppDepthFirstTreeBuilder "koho::DepthFirstTreeBuilder":
-        void                CppDepthFirstTreeBuilder(ClassesIdx_t      n_classes,
-                                                     FeaturesIdx_t     n_features,
-                                                     SamplesIdx_t      n_samples,
-                                                     ClassWeights_t*   class_weight,
-                                                     TreeDepthIdx_t    max_depth,
-                                                     FeaturesIdx_t     max_features,
-                                                     unsigned long     max_thresholds,
-                                                     string            missing_values,
-                                                     CppRandomState    random_state) except +
-        void                build(CppTree tree, Features_t* X, Classes_t* y, SamplesIdx_t n_samples)
+        void    CppDepthFirstTreeBuilder(OutputsIdx_t      n_outputs,
+                                         ClassesIdx_t*     n_classes,
+                                         ClassesIdx_t      n_classes_max,
+                                         FeaturesIdx_t     n_features,
+                                         SamplesIdx_t      n_samples,
+                                         ClassWeights_t*   class_weight,
+                                         TreeDepthIdx_t    max_depth,
+                                         FeaturesIdx_t     max_features,
+                                         unsigned long     max_thresholds,
+                                         string            missing_values,
+                                         CppRandomState    random_state) except +
+        void    build(CppTree tree, Features_t* X, Classes_t* y, SamplesIdx_t n_samples)
 
 # Cython wrapper class
 
@@ -133,19 +140,30 @@ cdef class Tree:
 
     cdef unique_ptr[CppTree] thisptr
 
-    def __cinit__(self, n_classes, n_features):
-        self.thisptr.reset(new CppTree(n_classes, n_features))
+    def __cinit__(self, n_outputs, unsigned long[::1] n_classes_view, n_features):
+        # normal use
+        if n_outputs is not None:
+            self.thisptr.reset(new CppTree(n_outputs, &n_classes_view[0], n_features))
+        # pickle use
+        else:
+            self.thisptr.reset(new CppTree())
+
+    # pickle extension types
 
     def __reduce__(self):
-        return (Tree, (deref(self.thisptr).n_classes, deref(self.thisptr).n_features), self.__getstate__())
+        return Tree, (None, None, None), self.__getstate__()
+
+    # explicit pickle
 
     def __getstate__(self):
         state = {}
-        state['version'] = '1'
-        state['n_classes']  = deref(self.thisptr).n_classes
-        state['n_features'] = deref(self.thisptr).n_features
-        state['max_depth']  = deref(self.thisptr).max_depth
-        state['node_count'] = deref(self.thisptr).node_count
+        state['version'] = '2'
+        state['n_outputs']     = deref(self.thisptr).n_outputs
+        state['n_classes']     = deref(self.thisptr).n_classes
+        state['n_classes_max'] = deref(self.thisptr).n_classes_max
+        state['n_features']    = deref(self.thisptr).n_features
+        state['max_depth']     = deref(self.thisptr).max_depth
+        state['node_count']    = deref(self.thisptr).node_count
         nodes = []
         for idx in range(deref(self.thisptr).node_count): # node id implicit in order
             nodes.append((deref(self.thisptr).nodes[idx].left_child,
@@ -159,15 +177,19 @@ cdef class Tree:
         state['nodes'] = nodes
         return state
 
+    # explicit unpickle
+
     def __setstate__(self, state):
         cdef unique_ptr[CppNode] nodeptr
         if 'version' not in state:
             raise ValueError('Unsupported pickle format!')
-        if state['version'] == '1':
-            deref(self.thisptr).n_classes  = state['n_classes']
-            deref(self.thisptr).n_features = state['n_features']
-            deref(self.thisptr).max_depth  = state['max_depth']
-            deref(self.thisptr).node_count = state['node_count']
+        if state['version'] == '2':
+            deref(self.thisptr).n_outputs     = state['n_outputs']
+            deref(self.thisptr).n_classes     = state['n_classes']
+            deref(self.thisptr).n_classes_max = state['n_classes_max']
+            deref(self.thisptr).n_features    = state['n_features']
+            deref(self.thisptr).max_depth     = state['max_depth']
+            deref(self.thisptr).node_count    = state['node_count']
             nodes = state['nodes']
             for node in nodes: # node id implicit in order
                 nodeptr.reset(new CppNode(node[0],node[1],node[2],node[3],node[4],node[5],node[6],node[7]))
@@ -181,10 +203,11 @@ cdef class Tree:
         """
         # [O] class probabilities [n_samples x n_classes]
         cdef unsigned long n_samples = X_view.shape[0]
-        cdef unsigned long n_classes = deref(self.thisptr).n_classes
-        y_prob = np.zeros((n_samples, n_classes), dtype=np.float64)
+        cdef unsigned long n_outputs = deref(self.thisptr).n_outputs
+        cdef unsigned long n_classes_max = deref(self.thisptr).n_classes_max
+        y_prob = np.zeros((n_samples, n_outputs * n_classes_max), dtype=np.float64)
         cdef double[:, ::1] y_prob_view = y_prob
-        deref(self.thisptr).predict(&X_view[0,0], n_samples, &y_prob_view[0,0])
+        deref(self.thisptr).predict(&X_view[0, 0], n_samples, &y_prob_view[0, 0])
         return y_prob
 
     def calculate_feature_importances(self):
@@ -197,8 +220,12 @@ cdef class Tree:
         deref(self.thisptr).calculate_feature_importances(&importances_view[0])
         return importances
 
+    def get_n_outputs(self):
+        return deref(self.thisptr).n_outputs
     def get_n_classes(self):
         return deref(self.thisptr).n_classes
+    def get_n_classes_max(self):
+        return deref(self.thisptr).n_classes_max
     def get_n_features(self):
         return deref(self.thisptr).n_features
     def get_max_depth(self):
@@ -229,16 +256,18 @@ cdef class DepthFirstTreeBuilder:
 
     cdef unique_ptr[CppDepthFirstTreeBuilder] thisptr
 
-    def __cinit__(self, n_classes, n_features,n_samples, double[::1] class_weight_view, max_depth, max_features,
-                  max_thresholds, missing_values, RandomState random_state):
-        self.thisptr.reset(new CppDepthFirstTreeBuilder(n_classes, n_features, n_samples, &class_weight_view[0],
+    def __cinit__(self, n_outputs, unsigned long[::1] n_classes_view, n_classes_max, n_features, n_samples,
+                  double[:, ::1] class_weight_view,
+                  max_depth, max_features, max_thresholds, missing_values, RandomState random_state):
+        self.thisptr.reset(new CppDepthFirstTreeBuilder(n_outputs, &n_classes_view[0], n_classes_max, n_features, n_samples,
+                               &class_weight_view[0, 0],
                                max_depth, max_features, max_thresholds, missing_values.encode('UTF-8'), deref(random_state.thisptr)))
 
-    def build(self, Tree tree, double[:, ::1] X_view, long[::1] y_view):
+    def build(self, Tree tree, double[:, ::1] X_view, long[:, ::1] y_view):
         """ Build a binary decision tree from the training data.
         """
         cdef unsigned long n_samples = X_view.shape[0]
-        deref(self.thisptr).build(deref(tree.thisptr), &X_view[0,0], &y_view[0], n_samples)
+        deref(self.thisptr).build(deref(tree.thisptr), &X_view[0, 0], &y_view[0, 0], n_samples)
         return
 
 

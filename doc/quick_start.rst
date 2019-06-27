@@ -91,6 +91,7 @@ Option 1: Build and install the ``koho`` package including `Cython`_:
 
 .. code-block:: text
 
+    $: sudo apt install cmake
     $: pip install cython
     koho$: python setup.py build_ext --inplace --use-cython
     koho$: pip install -e .
@@ -110,6 +111,7 @@ and the C++ API documentation using `doxygen`_:
 
 .. code-block:: text
 
+    $: sudo apt install doxygen
     $: conda install -c conda-forge sphinx sphinx-gallery sphinx_rtd_theme matplotlib pillow
     koho/doc$: make html
 
@@ -130,6 +132,7 @@ Test the ``koho`` package using `pytest`_ with `pytest-cov`_ plugin:
 .. code-block:: text
 
     $: conda install pytest pytest-cov
+    $: conda install python-graphviz
     koho$: pytest --disable-pytest-warnings -v --cov=koho --pyargs koho/sklearn
 
 .. _`pytest`: http://doc.pytest.org
